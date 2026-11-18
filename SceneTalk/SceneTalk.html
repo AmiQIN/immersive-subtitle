@@ -1,0 +1,1360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SceneTalk 情景译</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23ffffff'/%3E%3Cpath d='M3 6h17v11H11l-8 6z' fill='none' stroke='%232E9E6B' stroke-width='2'/%3E%3Cpath d='M18 17v9h9l5-4' fill='none' stroke='%2337352F' stroke-width='2'/%3E%3C/svg%3E">
+<style>
+/* ===== 设计令牌 ===== */
+:root{
+  --ink:#37352F;
+  --ink-2:#5F5B55;
+  --ink-3:#8C8781;
+  --line:#E6E4E1;
+  --line-2:#F1EFEC;
+  --paper:#FFFFFF;
+  --wash:#FAFAF8;
+  --green:#2E9E6B;
+  --green-tint:#EAF5F1;
+  --clay:#C2703D;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --sans:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei","Noto Sans SC",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--paper);color:var(--ink);
+  font-family:var(--sans);
+  font-size:14px;line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+button,input,textarea,select{font:inherit;color:inherit}
+button{background:none;border:0;cursor:pointer}
+ul{list-style:none}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#DCD9D4;border:3px solid var(--paper)}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ===== 骨架 ===== */
+.app{display:grid;grid-template-rows:auto 1fr;height:100vh}
+.bar{
+  display:flex;align-items:center;gap:18px;
+  padding:0 20px;height:56px;
+  border-bottom:1px solid var(--line);
+  background:var(--paper);
+}
+.mark{width:26px;height:26px;flex:none}
+.brand{font-size:15px;font-weight:600;letter-spacing:.2px;display:flex;align-items:baseline;gap:7px;flex:none}
+.brand span{font-size:12px;font-weight:400;color:var(--ink-3);letter-spacing:1px}
+.stats{margin-left:auto;font-size:12px;color:var(--ink-3);letter-spacing:.3px;flex:none}
+.stats b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.tabs{display:flex;gap:2px;flex:none}
+.tab{
+  padding:6px 13px;font-size:13px;color:var(--ink-2);
+  border-bottom:2px solid transparent;
+  text-decoration:none;
+}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--ink);border-bottom-color:var(--green);font-weight:600}
+main{overflow:hidden;position:relative}
+.view{display:none;height:100%}
+.view.on{display:block}
+.hidden{display:none !important}
+
+/* ===== 对话视图 ===== */
+#view-talk{display:none;grid-template-columns:404px 1fr;height:100%}
+#view-talk.on{display:grid}
+.left{
+  border-right:1px solid var(--line);
+  padding:18px 20px 20px;
+  display:flex;flex-direction:column;gap:10px;
+  overflow-y:auto;
+  background:var(--wash);
+}
+.sec-label{
+  font-size:11px;letter-spacing:1.4px;color:var(--ink-3);
+  text-transform:uppercase;margin-top:6px;
+  display:flex;align-items:center;gap:8px;
+}
+.sec-label::after{content:"";flex:1;height:1px;background:var(--line)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{
+  padding:5px 10px;font-size:12.5px;
+  border:1px solid var(--line);background:var(--paper);
+  color:var(--ink-2);border-radius:2px;
+  transition:border-color .12s,color .12s,background .12s;
+}
+.chip:hover{border-color:#CFCBC6;color:var(--ink)}
+.chip.on{background:var(--green-tint);border-color:var(--green);color:#1F7650;font-weight:600}
+
+.input-wrap{position:relative}
+textarea#zhInput{
+  width:100%;min-height:92px;resize:vertical;
+  padding:12px 46px 12px 12px;
+  border:1px solid var(--line);border-radius:2px;
+  background:var(--paper);font-size:14.5px;line-height:1.6;
+  outline:none;
+}
+textarea#zhInput:focus{border-color:var(--green)}
+textarea#zhInput::placeholder{color:#B7B2AC}
+.mic{
+  position:absolute;right:8px;bottom:8px;
+  width:32px;height:32px;border:1px solid var(--line);border-radius:2px;
+  display:grid;place-items:center;background:var(--paper);
+}
+.mic:hover{border-color:var(--green);color:var(--green)}
+.mic.live{border-color:var(--green);background:var(--green);color:#fff}
+.mic.live svg{stroke:#fff}
+.mic svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.6}
+.listening{
+  font-size:12px;color:var(--green);
+  display:none;align-items:center;gap:6px;
+}
+.listening.on{display:flex}
+.dot{width:6px;height:6px;background:var(--green);border-radius:50%;animation:pulse 1.1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+.row{display:flex;gap:8px}
+.btn{
+  padding:9px 15px;font-size:13.5px;border:1px solid var(--line);
+  background:var(--paper);border-radius:2px;color:var(--ink-2);
+  display:inline-flex;align-items:center;gap:7px;
+  transition:background .12s,border-color .12s,color .12s;
+}
+.btn:hover{border-color:#CFCBC6;color:var(--ink)}
+.btn.primary{background:var(--green);border-color:var(--green);color:#fff;font-weight:600;flex:1;justify-content:center}
+.btn.primary:hover{background:#28895D;border-color:#28895D;color:#fff}
+.btn.ghost{color:var(--ink-3)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.6;flex:none}
+.hint{font-size:12px;color:var(--ink-3);line-height:1.6}
+
+.mini-list{display:flex;flex-direction:column;gap:1px;margin-top:2px}
+.mini{
+  padding:7px 8px;border-bottom:1px dashed var(--line-2);
+  display:flex;gap:8px;align-items:flex-start;cursor:pointer;
+}
+.mini:hover{background:var(--paper)}
+.mini i{
+  font-style:normal;font-size:10px;color:var(--green);
+  border:1px solid var(--green-tint);background:var(--green-tint);
+  padding:1px 5px;flex:none;margin-top:2px;
+}
+.mini p{font-size:12.5px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini:hover p{color:var(--ink)}
+.mini-empty{font-size:12px;color:#B7B2AC;padding:8px}
+
+/* ===== 输出区 ===== */
+.right{padding:26px 34px;overflow-y:auto;display:flex;flex-direction:column}
+.empty{
+  margin:auto;text-align:center;color:var(--ink-3);
+  max-width:420px;
+}
+.empty .big{font-size:19px;color:var(--ink);margin-bottom:10px;letter-spacing:.2px}
+.empty .sub{font-size:13px;line-height:1.8}
+.empty .step{display:flex;flex-direction:column;gap:6px;margin-top:18px;text-align:left}
+.empty .step div{font-size:12.5px;display:flex;gap:9px;align-items:baseline}
+.empty .step em{font-style:normal;color:var(--green);font-weight:600;font-size:11px;letter-spacing:1px;flex:none}
+
+.card{max-width:660px;width:100%}
+.card-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.tag{
+  font-size:11px;letter-spacing:.6px;padding:2px 7px;
+  border:1px solid var(--line);color:var(--ink-3);border-radius:2px;
+}
+.tag.green{border-color:#BEE0D2;color:#1F7650;background:var(--green-tint)}
+.card h2{
+  font-family:var(--serif);
+  font-size:31px;line-height:1.34;font-weight:500;
+  letter-spacing:-.2px;color:var(--ink);
+}
+.card h2 .hi{color:var(--green)}
+.card .zh-line{
+  margin-top:12px;font-size:13px;color:var(--ink-3);
+  padding-left:10px;border-left:2px solid var(--line);
+}
+.block{margin-top:22px}
+.block-h{
+  font-size:11px;letter-spacing:1.4px;color:var(--ink-3);
+  text-transform:uppercase;margin-bottom:7px;
+}
+.alt-item{
+  font-size:15px;color:var(--ink-2);line-height:1.7;
+  padding:3px 0;
+  border-bottom:1px dashed var(--line-2);
+  display:flex;gap:10px;
+}
+.alt-item span{font-size:11px;color:var(--ink-3);flex:none;min-width:52px;padding-top:2px}
+.tip{
+  font-size:13px;line-height:1.8;color:var(--ink-2);
+  background:var(--wash);border:1px solid var(--line-2);
+  padding:11px 13px;
+}
+.tip b{color:var(--ink);font-weight:600}
+.card-actions{display:flex;gap:8px;margin-top:24px;flex-wrap:wrap;align-items:center}
+.spacer{flex:1}
+.meta{font-size:11.5px;color:#B7B2AC}
+
+/* ===== 复习视图 ===== */
+#view-review{padding:26px 34px;overflow-y:auto;background:var(--paper)}
+.review-head{display:flex;align-items:baseline;gap:14px;margin-bottom:22px;max-width:700px}
+.review-head h3{font-size:16px;font-weight:600;letter-spacing:.2px}
+.review-head p{font-size:12.5px;color:var(--ink-3)}
+.progress{height:2px;background:var(--line);margin:14px 0 26px;max-width:700px}
+.progress i{display:block;height:2px;background:var(--green);width:0}
+.rv-card{
+  max-width:700px;border:1px solid var(--line);padding:26px 28px;
+  background:var(--paper);
+}
+.rv-q{font-size:24px;font-family:var(--serif);line-height:1.5;color:var(--ink)}
+.rv-tags{display:flex;gap:8px;margin-bottom:14px}
+.rv-a{margin-top:22px;padding-top:22px;border-top:1px solid var(--line)}
+.rv-a h4{font-family:var(--serif);font-size:26px;font-weight:500;line-height:1.4;margin-bottom:10px}
+.rv-actions{display:flex;gap:8px;margin-top:26px;flex-wrap:wrap}
+.grade{flex:1;justify-content:center;min-width:120px}
+.grade.g0:hover{border-color:var(--clay);color:var(--clay)}
+.grade.g2:hover{border-color:var(--green);color:var(--green)}
+.done-box{
+  max-width:700px;padding:40px 0;text-align:center;color:var(--ink-3);
+}
+.done-box .big{font-size:18px;color:var(--ink);margin-bottom:8px}
+
+/* ===== 语料库 ===== */
+#view-library{padding:26px 34px;overflow-y:auto}
+.lib-head{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+.search{
+  flex:1;min-width:180px;max-width:340px;padding:9px 12px;
+  border:1px solid var(--line);border-radius:2px;background:var(--paper);outline:none;
+}
+.search:focus{border-color:var(--green)}
+.lib-group{margin-bottom:26px;max-width:840px}
+.lib-group h4{
+  font-size:12px;letter-spacing:1.2px;color:var(--ink-3);
+  text-transform:uppercase;margin-bottom:8px;
+  display:flex;align-items:center;gap:9px;
+}
+.lib-group h4 span{color:#B7B2AC;font-variant-numeric:tabular-nums}
+.lib-group h4::after{content:"";flex:1;height:1px;background:var(--line)}
+.lib-item{
+  display:flex;gap:12px;padding:10px 2px;border-bottom:1px solid var(--line-2);
+  align-items:flex-start;
+}
+.lib-item .txt{flex:1;min-width:0}
+.lib-item .en{font-size:15px;color:var(--ink);line-height:1.55}
+.lib-item .zh{font-size:12px;color:var(--ink-3);margin-top:2px}
+.lib-item .ops{display:flex;gap:4px;flex:none;opacity:0;transition:opacity .12s}
+.lib-item:hover .ops{opacity:1}
+.icon-btn{
+  width:26px;height:26px;display:grid;place-items:center;
+  border:1px solid transparent;color:var(--ink-3);border-radius:2px;
+}
+.icon-btn:hover{color:var(--ink);border-color:var(--line)}
+.icon-btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.6}
+
+/* ===== 设置 ===== */
+#view-settings{padding:26px 34px;overflow-y:auto}
+.set-wrap{max-width:620px;display:flex;flex-direction:column;gap:22px;padding-bottom:40px}
+.set-sec{border-top:1px solid var(--line);padding-top:16px}
+.set-sec > h4{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--ink-3);margin-bottom:12px}
+.field{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.field label{width:118px;flex:none;font-size:13px;color:var(--ink-2)}
+.field input[type=text],.field input[type=password],.field select,.field input[type=range]{
+  flex:1;min-width:0;padding:8px 10px;border:1px solid var(--line);
+  border-radius:2px;background:var(--paper);outline:none;font-size:13px;
+}
+.field input:focus,.field select:focus{border-color:var(--green)}
+.field input[type=range]{padding:0}
+.radio-row{display:flex;gap:8px;margin-bottom:12px}
+.radio{
+  flex:1;border:1px solid var(--line);padding:10px 12px;border-radius:2px;
+  font-size:13px;color:var(--ink-2);text-align:left;
+}
+.radio.on{border-color:var(--green);background:var(--green-tint);color:#1F7650}
+.radio b{display:block;font-size:13px;color:var(--ink);margin-bottom:2px}
+.radio.on b{color:#1F7650}
+.radio small{font-size:11.5px;color:var(--ink-3)}
+.set-note{font-size:12px;color:var(--ink-3);line-height:1.7;margin-top:2px}
+.toast{
+  position:fixed;left:50%;bottom:26px;transform:translateX(-50%);
+  background:var(--ink);color:#fff;font-size:13px;
+  padding:9px 16px;border-radius:2px;opacity:0;pointer-events:none;
+  transition:opacity .18s;z-index:99;
+}
+.toast.on{opacity:1}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <svg class="mark" viewBox="0 0 32 32"><path d="M3 6h17v11H11l-8 6z" fill="none" stroke="#2E9E6B" stroke-width="2"/><path d="M18 17v9h9l5-4" fill="none" stroke="#37352F" stroke-width="2"/></svg>
+    <div class="brand">SceneTalk<span>情景译</span></div>
+    <div class="stats">今日 <b id="statToday">0</b> 句　待复习 <b id="statDue">0</b> 句</div>
+    <nav class="tabs">
+      <a class="tab on" href="#/talk" data-view="talk">对话</a>
+      <a class="tab" href="#/review" data-view="review">复习</a>
+      <a class="tab" href="#/library" data-view="library">语料库</a>
+      <a class="tab" href="#/settings" data-view="settings">设置</a>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ===== 视图：对话 ===== -->
+    <section id="view-talk" class="view on">
+      <aside class="left">
+        <div class="sec-label">情境</div>
+        <div id="scenarioChips" class="chips"></div>
+
+        <div class="sec-label">你想说的中文</div>
+        <div class="input-wrap">
+          <textarea id="zhInput" placeholder="例如：这班车到不到人民广场？"></textarea>
+          <button id="micBtn" class="mic" title="语音输入（中文）">
+            <svg viewBox="0 0 24 24"><path d="M12 3.5a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0v-6a3 3 0 0 1 3-3z"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v2.5M8.5 20.5h7"/></svg>
+          </button>
+        </div>
+        <div class="listening" id="listenState"><span class="dot"></span><span id="listenText">正在听你说中文…说完会自动填入</span></div>
+
+        <div class="row">
+          <button id="genBtn" class="btn primary">生成英文</button>
+          <button id="sampleBtn" class="btn ghost">例句</button>
+        </div>
+        <div class="hint" id="engineHint"></div>
+
+        <div class="sec-label">今天收集</div>
+        <ul id="todayList" class="mini-list"></ul>
+      </aside>
+
+      <section class="right">
+        <div id="emptyState" class="empty">
+          <div class="big">把脑子里的中文丢进来</div>
+          <div class="sub">它不会逐字翻译，而是给出这个场景里英语母语者真正会说的话，并标出语气和替换说法。</div>
+          <div class="step">
+            <div><em>01</em>选一个情境，或者直接说</div>
+            <div><em>02</em>生成后右边的句子可以朗读、跟读</div>
+            <div><em>03</em>收藏的句子自动进入复习队列</div>
+          </div>
+        </div>
+
+        <article id="cardView" class="card hidden">
+          <div class="card-top">
+            <span class="tag green" id="cardScenario">日常闲聊</span>
+            <span class="tag" id="cardTone">语气</span>
+            <span class="spacer"></span>
+            <span class="meta" id="cardMeta"></span>
+          </div>
+          <h2 id="cardEn"></h2>
+          <div class="zh-line" id="cardZh"></div>
+
+          <div class="block">
+            <div class="block-h">换一种说法</div>
+            <div id="cardAlt"></div>
+          </div>
+
+          <div class="block">
+            <div class="block-h">读法提示</div>
+            <div class="tip" id="cardTip"></div>
+          </div>
+
+          <div class="card-actions">
+            <button class="btn" id="speakBtn">
+              <svg viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L13 19V5L7.5 9.5H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>
+              朗读
+            </button>
+            <button class="btn" id="slowBtn">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5l3 2"/></svg>
+              慢速
+            </button>
+            <button class="btn" id="favBtn">
+              <svg viewBox="0 0 24 24"><path d="M12 4.5l2.6 5.3 5.9.9-4.3 4.2 1 5.8-5.2-2.8-5.2 2.8 1-5.8-4.3-4.2 5.9-.9z"/></svg>
+              <span id="favLabel">标记重点</span>
+            </button>
+            <span class="spacer"></span>
+            <button class="btn ghost" id="anotherBtn">再换个说法</button>
+          </div>
+        </article>
+      </section>
+    </section>
+
+    <!-- ===== 视图：复习 ===== -->
+    <section id="view-review" class="view">
+      <div class="review-head">
+        <h3>间隔复习</h3>
+        <p id="reviewSub">按遗忘曲线推送你今天和前几天收的句子</p>
+      </div>
+      <div class="progress"><i id="reviewProgress"></i></div>
+      <div id="reviewBody"></div>
+    </section>
+
+    <!-- ===== 视图：语料库 ===== -->
+    <section id="view-library" class="view">
+      <div class="lib-head">
+        <input class="search" id="libSearch" type="text" placeholder="搜索中文或英文…">
+        <button class="btn" id="exportBtn">
+          <svg viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5"/><path d="M5 18.5h14"/></svg>
+          导出 JSON
+        </button>
+        <span class="hint" id="libCount"></span>
+      </div>
+      <div id="libBody"></div>
+    </section>
+
+    <!-- ===== 视图：设置 ===== -->
+    <section id="view-settings" class="view">
+      <div class="set-wrap">
+        <div class="set-sec">
+          <h4>生成引擎</h4>
+          <div class="radio-row">
+            <button class="radio on" data-engine="offline">
+              <b>内置情境语料</b>
+              <small>不用联网和密钥，按关键词匹配已收录的句子</small>
+            </button>
+            <button class="radio" data-engine="api">
+              <b>在线模型</b>
+              <small>任意 OpenAI 兼容接口，生成更贴合你原话的句子</small>
+            </button>
+          </div>
+          <div id="apiFields">
+            <div class="field"><label>接口地址</label><input type="text" id="setBaseUrl" placeholder="https://api.deepseek.com/v1"></div>
+            <div class="field"><label>模型名</label><input type="text" id="setModel" placeholder="deepseek-chat"></div>
+            <div class="field"><label>API Key</label><input type="password" id="setKey" placeholder="sk-… 仅存在本机"></div>
+            <div class="set-note">支持 DeepSeek、通义、智谱、Moonshot、OpenAI，以及本地 Ollama（地址填 http://localhost:11434/v1）。密钥只写进本机浏览器存储，不上传。</div>
+          </div>
+        </div>
+
+        <div class="set-sec">
+          <h4>输出偏好</h4>
+          <div class="field"><label>难度</label>
+            <select id="setLevel">
+              <option value="A2">A2 简单句，高频词</option>
+              <option value="B1" selected>B1 日常流利，考研常考</option>
+              <option value="B2">B2 表达更丰富，带短语动词</option>
+              <option value="C1">C1 接近母语，含习语</option>
+            </select>
+          </div>
+          <div class="field"><label>默认语气</label>
+            <select id="setTone">
+              <option value="natural" selected>口语自然</option>
+              <option value="polite">礼貌客气</option>
+              <option value="business">商务正式</option>
+              <option value="casual">熟人随意</option>
+            </select>
+          </div>
+          <div class="field"><label>朗读音色</label><select id="setVoice"></select></div>
+          <div class="field"><label>语速</label><input type="range" id="setRate" min="0.6" max="1.3" step="0.05" value="1"><span class="hint" id="rateVal">1.00×</span></div>
+        </div>
+
+        <div class="set-sec">
+          <h4>数据</h4>
+          <div class="row">
+            <button class="btn" id="importBtn">导入 JSON</button>
+            <button class="btn" id="clearBtn">清空所有句子</button>
+          </div>
+          <div class="set-note" id="dataNote"></div>
+        </div>
+      </div>
+      <input type="file" id="importFile" accept="application/json" class="hidden">
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ===================== 内置情境语料 =====================
+   每条：zh 中文原话 / en 母语者说法 / alt 替换说法 / tip 读法提示
+   tone 语气标签 / kw 用于中文关键词匹配                        */
+const CORPUS = [
+{s:"日常闲聊", items:[
+ {zh:"最近怎么样？",en:"How's everything going?",alt:["How have you been?","What's up lately?"],tip:"How's 读 /haʊz/，别拆成 how is；going 收尾弱读",tone:"随口问候",kw:["最近","怎么样","近况","还好吗"]},
+ {zh:"好久没见了。",en:"It's been ages.",alt:["Long time no see.","It's been a while."],tip:"ages 的 /dʒ/ 重读，整句收尾轻扬更自然",tone:"熟人寒暄",kw:["好久","没见","很久"]},
+ {zh:"周末一般干嘛？",en:"What do you usually get up to on weekends?",alt:["What do you do on weekends?","Any plans for the weekend?"],tip:"get up to 连读 /ɡetʌp tə/，to 弱化成 tə",tone:"闲聊",kw:["周末","干嘛","做什么","平时"]},
+ {zh:"我也这么想。",en:"That's exactly how I feel.",alt:["I feel the same way.","Couldn't agree more."],tip:"exactly 重音在 ex-，句尾 /l/ 别拖",tone:"认同",kw:["也","这么想","同意","一样"]},
+ {zh:"回头聊。",en:"Let's catch up later.",alt:["Talk later.","I'll text you later."],tip:"catch up 连读 /kætʃʌp/，later 的 t 可弹舌",tone:"收尾",kw:["回头","再聊","下次","晚点"]}
+]},
+{s:"点餐点单", items:[
+ {zh:"我要一杯少冰的拿铁。",en:"Could I get a latte with light ice?",alt:["Can I get a latte, easy on the ice?","I'd like a latte with just a little ice, please."],tip:"Could I 快读成 /kʊdaɪ/；light ice 连成 lightice",tone:"礼貌请求",kw:["拿铁","少冰","一杯","咖啡"]},
+ {zh:"这个辣不辣？",en:"Is this dish spicy?",alt:["How spicy is this?","Is it hot?"],tip:"spicy 重音 spi-；疑问句尾音上扬",tone:"询问",kw:["辣","辣不辣"]},
+ {zh:"可以打包吗？",en:"Could we get this to go?",alt:["Can I take this away?","Could you box this up for me?"],tip:"to go 的 to 读 /tə/，go 重读",tone:"礼貌请求",kw:["打包","带走","外带"]},
+ {zh:"我对花生过敏。",en:"I'm allergic to peanuts.",alt:["I can't have peanuts — I'm allergic.","Peanuts are off the table for me."],tip:"allergic 重音 -ler-，to 弱读",tone:"严肃说明",kw:["过敏","花生"]},
+ {zh:"买单，谢谢。",en:"Could we get the check, please?",alt:["Check, please.","We're ready for the bill."],tip:"check 收尾 /k/ 轻，please 语调下沉显客气",tone:"礼貌请求",kw:["买单","结账","账单","付钱"]}
+]},
+{s:"问路出行", items:[
+ {zh:"这班车到人民广场吗？",en:"Does this bus go to People's Square?",alt:["Is this the right bus for People's Square?","Will this take me to People's Square?"],tip:"go to 连读 /ɡoʊtə/；Square 重音",tone:"询问",kw:["到不到","公交","人民广场","这班","地铁"]},
+ {zh:"最近的地铁站在哪？",en:"Where's the nearest subway station?",alt:["How do I get to the closest metro stop?","Is there a subway station nearby?"],tip:"Where's 读 /werz/，nearest 连着读 nearrest",tone:"询问",kw:["地铁","最近","在哪","车站"]},
+ {zh:"走过去要多久？",en:"How long does it take on foot?",alt:["Is it walkable?","How far is it if I walk?"],tip:"on foot 的 on 弱读 /ən/，foot 收尾干脆",tone:"询问",kw:["多久","走过去","多远","走着"]},
+ {zh:"我坐反方向了。",en:"I think I'm going the wrong way.",alt:["I'm headed in the wrong direction.","I got on the wrong side."],tip:"wrong 的 /r/ 卷舌，way 稍微拖长",tone:"懊恼",kw:["坐反","方向","走错"]},
+ {zh:"下一站下车。",en:"I'm getting off at the next stop.",alt:["Next stop is mine.","I'll get off at the next one."],tip:"getting off 连读 /ɡetɪŋɔf/",tone:"陈述",kw:["下一站","下车"]}
+]},
+{s:"面试求职", items:[
+ {zh:"先自我介绍一下。",en:"Could you start by telling me about yourself?",alt:["Walk me through your background.","Mind giving me a quick intro?"],tip:"about 的 a 弱读 /ə/，yourself 重音 -self",tone:"面试提问",kw:["自我介绍","介绍一下","背景"]},
+ {zh:"我做过两年相关项目。",en:"I've spent two years working on projects like this.",alt:["I have two years of hands-on experience in this area.","Two years of my work has been in exactly this."],tip:"I've 读 /aɪv/，spent 的 /t/ 收尾要轻",tone:"沉稳陈述",kw:["两年","项目","做过","经验"]},
+ {zh:"我的英语还在提高。",en:"My English is still a work in progress.",alt:["I'm still working on my English.","My English is getting better day by day."],tip:"work in progress 连读，progress 重音 pro-",tone:"坦诚",kw:["英语","提高","还在学"]},
+ {zh:"想问一下薪资范围？",en:"Could you share the salary range for this role?",alt:["What's the pay range like?","Do you have a range in mind for the salary?"],tip:"salary 重音 sa-；range 的 /eɪ/ 要饱满",tone:"礼貌询问",kw:["薪资","工资","待遇","多少钱"]},
+ {zh:"什么时候能到岗？",en:"How soon would you need me to start?",alt:["When would you want me to come on board?","What's the expected start date?"],tip:"come on board 连读 onboard",tone:"确认",kw:["入职","到岗","什么时候","开始上班"]}
+]},
+{s:"课堂讨论", items:[
+ {zh:"老师，能再讲一遍吗？",en:"Sorry, could you go over that again?",alt:["Would you mind explaining that once more?","I didn't quite follow — could you repeat that?"],tip:"go over 连读 /ɡoʊwoʊvər/",tone:"课堂提问",kw:["再讲","一遍","没听懂","重复"]},
+ {zh:"我不同意这个观点。",en:"I see it a bit differently.",alt:["I'd argue the opposite.","I'm not sure I buy that."],tip:"differently 重音 di-；降调收尾显笃定",tone:"温和反驳",kw:["不同意","观点","不认同"]},
+ {zh:"这个例子能说明什么？",en:"What's this example meant to show?",alt:["What point is this example making?","What are we supposed to take from this?"],tip:"meant to 连读 /mentə/",tone:"追问",kw:["例子","说明","什么意思","意义"]},
+ {zh:"论文下周交。",en:"The paper's due next week.",alt:["The essay is due next week.","We've got till next week to hand it in."],tip:"due 读 /duː/，paper's 的 s 轻",tone:"陈述",kw:["论文","下周","交","截止"]},
+ {zh:"我准备得不太充分。",en:"I'm not really prepared for this.",alt:["I could have prepared better.","I'm a bit behind on the reading."],tip:"prepared 重音 -pared，前轻后重",tone:"坦白",kw:["准备","不充分","没准备好"]}
+]},
+{s:"酒店机场", items:[
+ {zh:"我有预订，姓张。",en:"I have a reservation under Zhang.",alt:["It's booked under Zhang.","There should be a booking for Zhang."],tip:"reservation 重音 -va-；under 弱读 /ʌndər/",tone:"办理入住",kw:["预订","姓张","酒店","入住"]},
+ {zh:"可以晚一点退房吗？",en:"Could I get a later checkout?",alt:["Is a late checkout possible?","Any chance I could check out later?"],tip:"checkout 连读，重音 check-",tone:"礼貌请求",kw:["退房","晚一点","延迟"]},
+ {zh:"我的行李没到。",en:"My luggage didn't make it.",alt:["My bag never came out.","My suitcase is missing."],tip:"didn't 的 t 几乎吞掉；make it 连读",tone:"无奈",kw:["行李","没到","丢了","不见了"]},
+ {zh:"这个能带上飞机吗？",en:"Can I take this through security?",alt:["Is this allowed in the cabin?","Will this get through security?"],tip:"through 的 th 咬舌；security 重音 -cu-",tone:"询问",kw:["带上飞机","安检","登机","随身"]},
+ {zh:"转机要等多久？",en:"How long's the layover?",alt:["How much time do I have between flights?","How long do I wait for the connection?"],tip:"How long's 读 /haʊ lɔŋz/",tone:"询问",kw:["转机","等多久","中转"]}
+]},
+{s:"看病买药", items:[
+ {zh:"我头疼了两天。",en:"I've had a headache for two days.",alt:["My head's been pounding for two days.","I've been getting headaches since Monday."],tip:"I've had 连读 /aɪv hæd/，headache 重音 head-",tone:"描述症状",kw:["头疼","两天","不舒服","难受"]},
+ {zh:"这个药一天吃几次？",en:"How often should I take this?",alt:["How many times a day do I take it?","What's the dosage on this?"],tip:"often 的 t 可省，读 /ɔfən/",tone:"询问",kw:["药","一天","几次","吃","用量"]},
+ {zh:"有没有副作用？",en:"Are there any side effects?",alt:["Does it come with any side effects?","Anything I should watch out for?"],tip:"side effects 连读成 sideeffects",tone:"询问",kw:["副作用"]},
+ {zh:"我需要开处方吗？",en:"Do I need a prescription for this?",alt:["Is this over the counter?","Can I get this without a prescription?"],tip:"prescription 重音 -scrip-",tone:"询问",kw:["处方","开药","要不要"]},
+ {zh:"我睡不好。",en:"I've been sleeping badly.",alt:["I can't sleep through the night.","My sleep's been off lately."],tip:"sleeping badly 中间连读，badly 重音 bad-",tone:"描述症状",kw:["睡不好","失眠","睡眠"]}
+]},
+{s:"购物退换", items:[
+ {zh:"这个能退吗？",en:"Can I return this?",alt:["Is this refundable?","Could I get a refund on this?"],tip:"return 重音 -turn；问句末尾轻扬",tone:"询问",kw:["退","退货","退款"]},
+ {zh:"有小一号的吗？",en:"Do you have this a size smaller?",alt:["Any chance you've got a smaller size?","Could I try one size down?"],tip:"size smaller 连读；smaller 重音 small-",tone:"询问",kw:["小一号","尺码","有没有","大码"]},
+ {zh:"这件能试穿吗？",en:"Can I try this on?",alt:["Mind if I try this on?","Where's the fitting room?"],tip:"try on 连读 /traɪɔn/",tone:"询问",kw:["试穿","试试","试衣间"]},
+ {zh:"打折吗？",en:"Is this on sale?",alt:["Any discount on this?","Is there a promotion running?"],tip:"on sale 连读，sale 拖音更自然",tone:"询问",kw:["打折","优惠","便宜","促销"]},
+ {zh:"付款时扫码。",en:"I'll pay by QR code.",alt:["Can I scan to pay?","Do you take mobile payment?"],tip:"QR 读 /kjuː ɑr/；pay by 连读",tone:"说明",kw:["扫码","付款","支付"]}
+]},
+{s:"约人改时间", items:[
+ {zh:"周六下午方便吗？",en:"Does Saturday afternoon work for you?",alt:["Are you free Saturday afternoon?","How's Saturday afternoon for you?"],tip:"work for you 连读，you 弱读成 yə",tone:"约见",kw:["周六","下午","方便","有空"]},
+ {zh:"能往后推一个小时吗？",en:"Could we push it back an hour?",alt:["Can we move it an hour later?","Any way we could shift it by an hour?"],tip:"push it back 连读成 pushitback",tone:"改期",kw:["推迟","一个小时","改时间","晚点"]},
+ {zh:"我可能迟到十分钟。",en:"I might be ten minutes late.",alt:["Running about ten minutes behind.","I'll be there ten minutes late, sorry."],tip:"minutes 的 t 常吞掉，读 minnits",tone:"提前告知",kw:["迟到","十分钟","晚到"]},
+ {zh:"改天吧。",en:"Let's take a rain check.",alt:["Can we do it another time?","Let's push it to another day."],tip:"rain check 连读，语气要轻快，别显得敷衍",tone:"委婉推迟",kw:["改天","下次","另约"]},
+ {zh:"地点定在哪？",en:"Where should we meet?",alt:["Where do you want to meet up?","What's the meeting point?"],tip:"meet up 连读；meeting point 重音 meet-",tone:"确认",kw:["地点","在哪","见面","约"]}
+]},
+{s:"抱怨吐槽", items:[
+ {zh:"这也太离谱了。",en:"That's a bit much, honestly.",alt:["That's ridiculous.","That's pushing it."],tip:"honestly 放句尾轻读，才有口语味",tone:"私下吐槽",kw:["离谱","过分","吐槽","夸张"]},
+ {zh:"我等了半个小时。",en:"I've been waiting for half an hour.",alt:["I've been standing here for thirty minutes.","Half an hour and still nothing."],tip:"half an hour 连读成 halfanour",tone:"不满",kw:["等了","半小时","很久"]},
+ {zh:"空调坏了。",en:"The AC's not working.",alt:["The air conditioning is broken.","The AC's out."],tip:"AC's 读 /eɪsiːz/，not working 中间连读",tone:"说明问题",kw:["空调","坏了","不工作"]},
+ {zh:"能催一下吗？",en:"Could you chase this up for me?",alt:["Any way to speed this up?","Could you follow up on it?"],tip:"chase up 连读；follow up 连读",tone:"不失礼的催促",kw:["催","催促","跟进","进度"]},
+ {zh:"我不太满意这个结果。",en:"I'm not thrilled with how this turned out.",alt:["This isn't quite what I expected.","I was hoping for something better."],tip:"thrilled 的 th 咬舌；turned out 连读",tone:"克制的抱怨",kw:["不满意","结果","失望"]}
+]},
+{s:"电话沟通", items:[
+ {zh:"喂，请问是李经理吗？",en:"Hi, is this Mr. Li?",alt:["Hello, am I speaking with Mr. Li?","Is that Mr. Li on the line?"],tip:"is this 连读 /ɪzðɪs/",tone:"电话开场",kw:["喂","请问","是","经理"]},
+ {zh:"现在方便说话吗？",en:"Is now a good time?",alt:["Are you free to talk right now?","Did I catch you at a bad time?"],tip:"good time 连读；catch you 连读成 katchu",tone:"礼貌询问",kw:["方便","说话","现在","打扰"]},
+ {zh:"我没听清，能再说一遍吗？",en:"Sorry, I didn't catch that.",alt:["Could you say that again?","I missed that — one more time?"],tip:"didn't catch 连读 /dɪdən kætʃ/",tone:"请对方重复",kw:["没听清","再说一遍","听不清"]},
+ {zh:"我稍后回你电话。",en:"I'll call you back.",alt:["Let me ring you back in a bit.","I'll get back to you shortly."],tip:"call you 连读 /kɔlju/",tone:"承诺",kw:["回电话","稍后","打给你"]},
+ {zh:"信号不太好。",en:"The line's a bit patchy.",alt:["You're breaking up.","I'm losing you a little."],tip:"patchy 重音 pa-；breaking up 连读",tone:"说明情况",kw:["信号","不好","听不见"]}
+]},
+{s:"租房看房", items:[
+ {zh:"这个月租多少？",en:"What's the rent per month?",alt:["How much is it monthly?","What are you asking for rent?"],tip:"rent 的 /t/ 轻；monthly 重音 month-",tone:"询问",kw:["房租","月租","多少钱","租金"]},
+ {zh:"押一付三吗？",en:"Is it one month's deposit plus three months upfront?",alt:["How's the deposit structured?","Do I pay a deposit and three months in advance?"],tip:"upfront 重音 -front；deposit 重音 -po-",tone:"询问",kw:["押金","押一付三","预付"]},
+ {zh:"能看下房子吗？",en:"Could I have a look at the place?",alt:["Can I schedule a viewing?","Mind if I come by and see it?"],tip:"have a look 连读成 havalook",tone:"约看房",kw:["看房","看一下","房子"]},
+ {zh:"水电怎么算？",en:"How are utilities handled?",alt:["Are utilities included?","Who pays for water and electricity?"],tip:"utilities 重音 -til-",tone:"询问",kw:["水电","物业","费用","杂费"]},
+ {zh:"合同签多久？",en:"How long is the lease?",alt:["What's the minimum lease term?","Am I locked in for a year?"],tip:"lease 的 /s/ 要清晰，别含糊成 leas",tone:"询问",kw:["合同","签","多久","租期"]}
+]}
+];
+
+/* 展平索引，便于匹配与遍历 */
+const ALL_ITEMS = CORPUS.flatMap(g => g.items.map(it => Object.assign({s:g.s}, it)));
+const SCENARIO_NAMES = CORPUS.map(g => g.s);
+
+/* ===================== 存储 ===================== */
+const LS_KEY = "scenetalk.v1";
+const DEFAULT_SETTINGS = {
+  engine:"offline",
+  baseUrl:"https://api.deepseek.com/v1",
+  model:"deepseek-chat",
+  key:"",
+  level:"B1",
+  tone:"natural",
+  voiceName:"",
+  rate:1
+};
+const INTERVALS = [1, 3, 7, 16, 35, 90];   /* 每个记忆箱对应的间隔天数 */
+
+function $(id){ return document.getElementById(id); }
+function todayStr(d){
+  const t = d ? new Date(d) : new Date();
+  const p = n => String(n).padStart(2,"0");
+  return t.getFullYear() + "-" + p(t.getMonth()+1) + "-" + p(t.getDate());
+}
+function addDays(n){
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return todayStr(d);
+}
+function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+
+let state = loadState();
+
+function loadState(){
+  let data = {settings:{}, cards:[]};
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if(raw) data = JSON.parse(raw) || data;
+  }catch(e){ console.warn("读取本地数据失败", e); }
+  data.settings = Object.assign({}, DEFAULT_SETTINGS, data.settings || {});
+  data.cards = Array.isArray(data.cards) ? data.cards : [];
+  data.scenario = data.scenario || "";
+  return data;
+}
+function saveState(){
+  try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+  catch(e){ toast("本机存储写入失败，句子可能保不住"); }
+}
+
+/* ===================== 小组件 ===================== */
+let toastTimer = null;
+function toast(msg){
+  const el = $("toast");
+  el.textContent = msg;
+  el.classList.add("on");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("on"), 2600);
+}
+
+/* ===================== 视图路由 ===================== */
+const VIEWS = ["talk","review","library","settings"];
+function go(view){
+  if(VIEWS.indexOf(view) < 0) view = "talk";
+  VIEWS.forEach(v => {
+    $("view-" + v).classList.toggle("on", v === view);
+    const tab = document.querySelector('.tab[data-view="' + v + '"]');
+    if(tab) tab.classList.toggle("on", v === view);
+  });
+  if(view === "review") buildReviewQueue();
+  if(view === "library") renderLibrary();
+  if(view === "settings") renderSettings();
+}
+function currentView(){
+  const h = (location.hash || "#/talk").replace("#/","");
+  return VIEWS.indexOf(h) >= 0 ? h : "talk";
+}
+window.addEventListener("hashchange", () => go(currentView()));
+
+/* ===================== 语音朗读 ===================== */
+let voices = [];
+function loadVoices(){
+  if(!("speechSynthesis" in window)) return;
+  voices = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang));
+  const sel = $("setVoice");
+  if(sel && voices.length){
+    sel.innerHTML = "";
+    voices.forEach((v,i) => {
+      const o = document.createElement("option");
+      o.value = v.name;
+      o.textContent = v.name + "（" + v.lang + "）" + (i === 0 ? " · 默认" : "");
+      sel.appendChild(o);
+    });
+    const want = state.settings.voiceName;
+    sel.value = want && voices.some(v => v.name === want) ? want : voices[0].name;
+    state.settings.voiceName = sel.value;
+  }
+}
+if("speechSynthesis" in window){
+  speechSynthesis.onvoiceschanged = loadVoices;
+  loadVoices();
+}
+
+function speak(text, rateOverride){
+  if(!text) return;
+  if(!("speechSynthesis" in window)){ toast("这个窗口不支持朗读"); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "en-US";
+  u.rate = rateOverride || Number(state.settings.rate) || 1;
+  const v = voices.find(x => x.name === state.settings.voiceName) || voices[0];
+  if(v) u.voice = v;
+  speechSynthesis.speak(u);
+}
+
+/* ===================== 语音识别（中文） ===================== */
+const SRClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog = null;
+
+function setListening(on, text){
+  $("micBtn").classList.toggle("live", on);
+  $("listenState").classList.toggle("on", on);
+  if(text) $("listenText").textContent = text;
+}
+function stopListen(){
+  if(recog){ try{ recog.onend = null; recog.stop(); }catch(e){} recog = null; }
+  setListening(false);
+}
+function toggleMic(){
+  if(recog){ stopListen(); return; }
+  if(!SRClass){
+    toast("这个窗口的语音识别不可用，直接打字也很快");
+    $("zhInput").focus();
+    return;
+  }
+  recog = new SRClass();
+  recog.lang = "zh-CN";
+  recog.continuous = false;
+  recog.interimResults = true;
+  recog.onresult = ev => {
+    let txt = "";
+    for(let i = ev.resultIndex; i < ev.results.length; i++) txt += ev.results[i][0].transcript;
+    $("zhInput").value = txt;
+    const last = ev.results[ev.results.length - 1];
+    if(last && last.isFinal){
+      stopListen();
+      generate(false);
+    }
+  };
+  recog.onerror = ev => {
+    setListening(false);
+    recog = null;
+    const m = {
+      "not-allowed":"麦克风被拒绝了，在窗口设置里允许麦克风再试",
+      "no-speech":"没听到声音，再按一次麦克风",
+      "network":"识别服务连不上，检查网络或直接打字",
+      "audio-capture":"找不到麦克风设备"
+    };
+    toast(m[ev.error] || ("语音识别出错：" + ev.error));
+  };
+  recog.onend = () => setListening(false);
+  try{
+    recog.start();
+    setListening(true, "正在听你说中文…说完自动生成");
+  }catch(e){
+    stopListen();
+    toast("麦克风启动失败，先打字吧");
+  }
+}
+
+/* ===================== 情境筹码 ===================== */
+function renderChips(){
+  const box = $("scenarioChips");
+  box.innerHTML = "";
+  const all = document.createElement("button");
+  all.className = "chip" + (state.scenario ? "" : " on");
+  all.textContent = "不限";
+  all.onclick = () => { state.scenario = ""; saveState(); renderChips(); refreshHint(); };
+  box.appendChild(all);
+  SCENARIO_NAMES.forEach(name => {
+    const b = document.createElement("button");
+    b.className = "chip" + (state.scenario === name ? " on" : "");
+    b.textContent = name;
+    b.onclick = () => {
+      state.scenario = state.scenario === name ? "" : name;
+      saveState(); renderChips(); refreshHint();
+    };
+    box.appendChild(b);
+  });
+}
+
+function refreshHint(){
+  const hint = $("engineHint");
+  if(state.settings.engine === "api" && state.settings.key){
+    hint.textContent = "在线模型 · " + (state.settings.model || "未填模型名") + " · " + state.settings.level;
+  } else if(state.settings.engine === "api"){
+    hint.textContent = "还没填 API Key，先在设置里配上；现在用内置语料兜底";
+  } else {
+    hint.textContent = "内置语料 · " + ALL_ITEMS.length + " 句 · " + SCENARIO_NAMES.length + " 个情境" +
+      (state.scenario ? "（当前限定：" + state.scenario + "）" : "");
+  }
+}
+
+/* ===================== 离线匹配 ===================== */
+function matchOffline(text){
+  const pool = state.scenario ? ALL_ITEMS.filter(i => i.s === state.scenario) : ALL_ITEMS;
+  let best = null, bestScore = 0;
+  pool.forEach(it => {
+    let score = 0;
+    it.kw.forEach(k => { if(text.indexOf(k) >= 0) score += k.length >= 2 ? 2 : 1; });
+    if(text.indexOf(it.s) >= 0) score += 1;
+    if(it.zh && text.indexOf(it.zh.slice(0, 4)) >= 0) score += 2;
+    if(score > bestScore){ bestScore = score; best = it; }
+  });
+  return bestScore >= 2 ? Object.assign({}, best) : null;
+}
+function nearestItems(text, n){
+  const pool = state.scenario ? ALL_ITEMS.filter(i => i.s === state.scenario) : ALL_ITEMS;
+  const scored = pool.map(it => {
+    let s = 0;
+    it.kw.forEach(k => { if(text.indexOf(k) >= 0) s += 2; });
+    return {it, s};
+  }).sort((a,b) => b.s - a.s);
+  return scored.slice(0, n || 3).map(x => x.it);
+}
+
+/* ===================== 在线模型 ===================== */
+const LEVEL_WORDS = {A2:"A2（简单句、高频词）",B1:"B1（日常流利、考研常见表达）",B2:"B2（表达更丰富、会用短语动词）",C1:"C1（接近母语、可用习语）"};
+const TONE_WORDS = {natural:"口语自然",polite:"礼貌客气",business:"商务正式",casual:"熟人随意"};
+
+function buildSystemPrompt(){
+  return [
+    "你是一位给中国成年人做「情境化英语表达」的教练。",
+    "用户会给你一句中文——可能是口语、半截话、甚至带情绪。你要判断场景、说话人关系和真实意图，",
+    "然后给出这个场景下英语母语者真正会开口说的话，而不是逐字直译。",
+    "硬性要求：",
+    "1) en 控制在 8–22 个词，必须是能直接说出口的口语，不用书面长句；",
+    "2) alt 给两条替换说法，语气或礼貌程度要和 en 有可见差别；",
+    "3) tip 只讲一个读法要点（连读、弱读、重音或语调），用中文写，别堆音标；",
+    "4) tone 是 2–4 个汉字的语气标签，例如「委婉拒绝」「礼貌请求」；",
+    "5) 难度按 " + LEVEL_WORDS[state.settings.level] + " 控制，语气基调是「" + TONE_WORDS[state.settings.tone] + "」；",
+    "6) 只输出 JSON，不要解释、不要 Markdown 代码块、不要多余文字：",
+    '{"en":"...","alt":["...","..."],"tip":"...","tone":"..."}'
+  ].join("\n");
+}
+
+async function callModel(text, isVariant){
+  const s = state.settings;
+  const base = (s.baseUrl || "").replace(/\/+$/,"");
+  if(!base || !s.key) throw new Error("没配置接口地址或密钥");
+  const body = {
+    model: s.model || "deepseek-chat",
+    temperature: isVariant ? 0.95 : 0.7,
+    max_tokens: 400,
+    messages: [
+      {role:"system", content: buildSystemPrompt()},
+      {role:"user", content:
+        (state.scenario ? "场景：" + state.scenario + "\n" : "") +
+        "这句中文是：" + text +
+        (isVariant ? "\n上一版已经用过，请换一种明显不同的说法。" : "")}
+    ]
+  };
+  const res = await fetch(base + "/chat/completions", {
+    method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":"Bearer " + s.key},
+    body: JSON.stringify(body)
+  });
+  if(!res.ok){
+    const t = await res.text().catch(() => "");
+    throw new Error("接口返回 " + res.status + (t ? "：" + t.slice(0, 120) : ""));
+  }
+  const data = await res.json();
+  const raw = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
+  const jsonText = raw.replace(/```json|```/g,"").trim();
+  const start = jsonText.indexOf("{"), end = jsonText.lastIndexOf("}");
+  if(start < 0 || end < 0) throw new Error("模型没按要求返回 JSON");
+  const obj = JSON.parse(jsonText.slice(start, end + 1));
+  if(!obj.en) throw new Error("返回里没有英文句子");
+  return {
+    zh: text,
+    en: String(obj.en).trim(),
+    alt: Array.isArray(obj.alt) ? obj.alt.slice(0,3).map(String) : [],
+    tip: obj.tip ? String(obj.tip) : "先跟着朗读两遍，再把重音落在实词上。",
+    tone: obj.tone ? String(obj.tone) : "陈述",
+    s: state.scenario || "不限情境"
+  };
+}
+
+/* ===================== 卡片渲染 ===================== */
+let currentItem = null;
+let lastInput = "";
+
+function ensureNoMatchBox(){
+  let box = $("noMatchBox");
+  if(!box){
+    box = document.createElement("article");
+    box.id = "noMatchBox";
+    box.className = "card hidden";
+    $("cardView").parentNode.insertBefore(box, $("cardView"));
+  }
+  return box;
+}
+
+function showCard(item, zhText){
+  const zh = zhText || item.zh;
+  currentItem = Object.assign({}, item, {zh: zh});
+  lastInput = zh;
+  $("emptyState").classList.add("hidden");
+  ensureNoMatchBox().classList.add("hidden");
+  $("cardView").classList.remove("hidden");
+
+  $("cardScenario").textContent = item.s || "情景";
+  $("cardTone").textContent = item.tone || "语气";
+  $("cardEn").textContent = item.en;
+  $("cardZh").textContent = "你说：" + zh;
+  $("cardMeta").textContent = state.settings.engine === "api" && state.settings.key ? "在线生成" : "内置语料";
+
+  const altBox = $("cardAlt");
+  altBox.innerHTML = "";
+  (item.alt || []).forEach((a, i) => {
+    const row = document.createElement("div");
+    row.className = "alt-item";
+    const n = document.createElement("span");
+    n.textContent = "0" + (i + 1);
+    const p = document.createElement("p");
+    p.textContent = a;
+    p.style.cursor = "pointer";
+    p.onclick = () => speak(a);
+    row.appendChild(n); row.appendChild(p);
+    altBox.appendChild(row);
+  });
+  if(!(item.alt || []).length) altBox.innerHTML = '<div class="alt-item"><span>—</span><p>这句没有再收别的说法</p></div>';
+
+  $("cardTip").innerHTML = "";
+  $("cardTip").textContent = item.tip || "把句子里最实在的那个词读重一点，其余轻带过去。";
+
+  updateFavBtn();
+}
+
+function cardExists(en){
+  return state.cards.some(c => c.en === en);
+}
+function updateFavBtn(){
+  const label = $("favLabel") || $("favBtn");
+  if(!currentItem) return;
+  const has = cardExists(currentItem.en);
+  if($("favLabel")) $("favLabel").textContent = has ? "已存（重点）" : "标记重点";
+  $("favBtn").classList.toggle("primary", false);
+  if(has){ $("favBtn").style.borderColor = "#BEE0D2"; $("favBtn").style.color = "#1F7650"; }
+  else { $("favBtn").style.borderColor = ""; $("favBtn").style.color = ""; }
+}
+
+function renderNoMatch(text){
+  const box = ensureNoMatchBox();
+  $("cardView").classList.add("hidden");
+  $("emptyState").classList.add("hidden");
+  box.classList.remove("hidden");
+  const near = nearestItems(text, 3);
+  box.innerHTML = "";
+  const top = document.createElement("div");
+  top.className = "card-top";
+  top.innerHTML = '<span class="tag">内置语料</span><span class="tag green">未覆盖</span><span class="spacer"></span><span class="meta">换个说法也能练</span>';
+  box.appendChild(top);
+  const h = document.createElement("h2");
+  h.textContent = "这句还没收录";
+  box.appendChild(h);
+  const zl = document.createElement("div");
+  zl.className = "zh-line";
+  zl.textContent = "你说：" + text;
+  box.appendChild(zl);
+
+  const b = document.createElement("div");
+  b.className = "block";
+  b.innerHTML = '<div class="block-h">语料库里最接近的几句</div>';
+  near.forEach(it => {
+    const row = document.createElement("div");
+    row.className = "alt-item";
+    const n = document.createElement("span");
+    n.textContent = it.s;
+    const p = document.createElement("p");
+    p.textContent = it.en;
+    p.style.cursor = "pointer";
+    p.onclick = () => { $("zhInput").value = it.zh; showCard(it, it.zh); };
+    row.appendChild(n); row.appendChild(p);
+    b.appendChild(row);
+  });
+  box.appendChild(b);
+
+  const t = document.createElement("div");
+  t.className = "block";
+  t.innerHTML = '<div class="block-h">想要任意一句都翻</div><div class="tip">在设置里换成「在线模型」，填上 DeepSeek 之类的 OpenAI 兼容接口，就能按你原话来生成；离线语料目前是 60 句、12 个情境。</div>';
+  box.appendChild(t);
+}
+
+/* ===================== 生成 ===================== */
+let busy = false;
+async function generate(isVariant){
+  const text = ($("zhInput").value || "").trim();
+  if(!text){ toast("先说一句中文，或者点「例句」"); $("zhInput").focus(); return; }
+  if(busy) return;
+  busy = true;
+  const btn = $("genBtn");
+  const old = btn.textContent;
+  btn.textContent = "生成中…";
+  btn.disabled = true;
+  try{
+    let item;
+    if(state.settings.engine === "api" && state.settings.key){
+      item = await callModel(text, !!isVariant);
+    } else {
+      if(isVariant){
+        const cands = (state.scenario ? ALL_ITEMS.filter(i => i.s === state.scenario) : ALL_ITEMS);
+        const same = cands.filter(i => currentItem && i.s === currentItem.s && i.en !== currentItem.en);
+        item = same.length ? same[Math.floor(Math.random() * same.length)] : matchOffline(text);
+      } else {
+        item = matchOffline(text);
+      }
+      if(!item){ renderNoMatch(text); return; }
+    }
+    showCard(item, text);
+    remember(item, text);
+    renderToday();
+    renderStats();
+  }catch(err){
+    console.warn(err);
+    const fallback = matchOffline(text);
+    if(fallback){
+      showCard(fallback, text);
+      remember(fallback, text);
+      renderToday(); renderStats();
+      toast("在线生成失败，已用内置语料兜底：" + (err.message || "网络问题"));
+    } else {
+      renderNoMatch(text);
+      toast("生成失败：" + (err.message || "检查接口设置"));
+    }
+  }finally{
+    busy = false;
+    btn.textContent = old;
+    btn.disabled = false;
+  }
+}
+
+/* 自动入语料库：同一英文句子只存一份 */
+function remember(item, zhText){
+  const exist = state.cards.find(c => c.en === item.en);
+  if(exist){
+    exist.zh = zhText || exist.zh;
+    exist.at = exist.at || new Date().toISOString();
+    saveState();
+    return exist;
+  }
+  const card = {
+    id: uid(),
+    zh: zhText || item.zh,
+    en: item.en,
+    alt: item.alt || [],
+    tip: item.tip || "",
+    tone: item.tone || "",
+    s: item.s || (state.scenario || "不限情境"),
+    createdAt: todayStr(),
+    at: new Date().toISOString(),
+    box: 0,
+    due: todayStr(),
+    star: false
+  };
+  state.cards.push(card);
+  saveState();
+  return card;
+}
+
+/* ===================== 今日收集 ===================== */
+function renderToday(){
+  const list = $("todayList");
+  const items = state.cards.filter(c => c.createdAt === todayStr()).sort((a,b) => (b.at||"").localeCompare(a.at||""));
+  list.innerHTML = "";
+  if(!items.length){
+    list.innerHTML = '<li class="mini-empty">生成的句子会自动出现在这里</li>';
+    return;
+  }
+  items.forEach(c => {
+    const li = document.createElement("li");
+    li.className = "mini";
+    const tag = document.createElement("i");
+    tag.textContent = (c.s || "情").slice(0, 3);
+    const p = document.createElement("p");
+    p.textContent = c.en;
+    li.appendChild(tag); li.appendChild(p);
+    li.onclick = () => {
+      $("zhInput").value = c.zh;
+      showCard(c, c.zh);
+    };
+    list.appendChild(li);
+  });
+}
+
+function renderStats(){
+  const t = todayStr();
+  $("statToday").textContent = state.cards.filter(c => c.createdAt === t).length;
+  $("statDue").textContent = state.cards.filter(c => (c.due || t) <= t).length;
+}
+
+/* ===================== 复习 ===================== */
+let rv = {queue:[], idx:0, revealed:false};
+
+function buildReviewQueue(){
+  const t = todayStr();
+  rv = {
+    queue: state.cards.filter(c => (c.due || t) <= t).sort((a,b) => (a.due||"").localeCompare(b.due||"")),
+    idx: 0, revealed: false
+  };
+  renderReview();
+}
+
+function renderReview(){
+  const body = $("reviewBody");
+  body.innerHTML = "";
+  const t = todayStr();
+  const total = rv.queue.length;
+  $("reviewSub").textContent = total ? "今天有 " + total + " 句到期，答不出来的会自动压到明天" : "按遗忘曲线推送你收过的句子";
+  $("reviewProgress").style.width = total ? Math.round(rv.idx / total * 100) + "%" : "0%";
+
+  if(!total || rv.idx >= total){
+    const done = document.createElement("div");
+    done.className = "done-box";
+    done.innerHTML = '<div class="big">今天的复习清空了</div><div>共 ' +
+      state.cards.length + ' 句在库，明天会再推一批回来。</div>';
+    const btn = document.createElement("div");
+    btn.style.marginTop = "18px";
+    btn.innerHTML = '<button class="btn" id="backTalk">回去接着说</button>';
+    done.appendChild(btn);
+    body.appendChild(done);
+    const b = $("backTalk");
+    if(b) b.onclick = () => { location.hash = "#/talk"; };
+    return;
+  }
+
+  const c = rv.queue[rv.idx];
+  const wrap = document.createElement("article");
+  wrap.className = "rv-card";
+  wrap.innerHTML =
+    '<div class="rv-tags"><span class="tag green">' + esc(c.s || "情境") + '</span>' +
+    '<span class="tag">第 ' + (rv.idx + 1) + ' / ' + total + ' 句</span>' +
+    (c.tone ? '<span class="tag">' + esc(c.tone) + '</span>' : '') + '</div>' +
+    '<div class="rv-q">' + esc(c.zh) + '</div>' +
+    '<div class="rv-a hidden" id="rvAnswer"><h4>' + esc(c.en) + '</h4>' +
+      (c.tip ? '<div class="tip">' + esc(c.tip) + '</div>' : '') + '</div>' +
+    '<div class="rv-actions" id="rvActions"></div>';
+  body.appendChild(wrap);
+
+  const actions = wrap.querySelector("#rvActions");
+  if(!rv.revealed){
+    const show = document.createElement("button");
+    show.className = "btn primary";
+    show.textContent = "想好了，看答案";
+    show.onclick = () => { rv.revealed = true; renderReview(); };
+    const spk = document.createElement("button");
+    spk.className = "btn ghost";
+    spk.textContent = "听一下";
+    spk.onclick = () => speak(c.en);
+    actions.appendChild(show);
+    actions.appendChild(spk);
+  } else {
+    wrap.querySelector("#rvAnswer").classList.remove("hidden");
+    const grades = [
+      {label:"没想起来", g:0, cls:"g0"},
+      {label:"勉强想起", g:1, cls:"g1"},
+      {label:"张口就来", g:2, cls:"g2"}
+    ];
+    grades.forEach(x => {
+      const b = document.createElement("button");
+      b.className = "btn grade " + x.cls;
+      b.textContent = x.label;
+      b.onclick = () => grade(c, x.g);
+      actions.appendChild(b);
+    });
+    const spk = document.createElement("button");
+    spk.className = "btn ghost";
+    spk.textContent = "朗读";
+    spk.onclick = () => speak(c.en);
+    actions.appendChild(spk);
+  }
+}
+
+function grade(card, g){
+  const idx = state.cards.findIndex(c => c.id === card.id);
+  if(idx < 0){ rv.idx++; rv.revealed = false; renderReview(); return; }
+  const c = state.cards[idx];
+  if(g === 0){
+    c.box = 0;
+    c.due = addDays(1);
+  } else {
+    c.box = Math.min(5, (c.box || 0) + g);
+    c.due = addDays(INTERVALS[c.box]);
+  }
+  saveState();
+  rv.idx++;
+  rv.revealed = false;
+  renderReview();
+  renderStats();
+}
+
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
+}
+
+/* ===================== 语料库 ===================== */
+function renderLibrary(){
+  const q = ($("libSearch").value || "").trim().toLowerCase();
+  const body = $("libBody");
+  body.innerHTML = "";
+  const groups = {};
+  state.cards.forEach(c => {
+    if(q && (c.en + " " + c.zh + " " + (c.s||"")).toLowerCase().indexOf(q) < 0) return;
+    const key = c.s || "不限情境";
+    (groups[key] = groups[key] || []).push(c);
+  });
+  const keys = Object.keys(groups).sort((a,b) => groups[b].length - groups[a].length);
+  $("libCount").textContent = state.cards.length ? "共 " + state.cards.length + " 句" : "还没句子，先去对话页生成";
+
+  if(!keys.length){
+    body.innerHTML = '<div class="hint" style="padding:20px 0">' + (state.cards.length ? "没有匹配的句子" : "语料库是空的") + '</div>';
+    return;
+  }
+  keys.forEach(k => {
+    const g = document.createElement("div");
+    g.className = "lib-group";
+    const h = document.createElement("h4");
+    h.innerHTML = esc(k) + " <span>" + groups[k].length + "</span>";
+    g.appendChild(h);
+    groups[k].slice().sort((a,b) => (b.at||"").localeCompare(a.at||"")).forEach(c => {
+      const item = document.createElement("div");
+      item.className = "lib-item";
+      const txt = document.createElement("div");
+      txt.className = "txt";
+      txt.innerHTML = '<div class="en">' + esc(c.en) + '</div><div class="zh">' +
+        esc(c.zh) + (c.tone ? " · " + esc(c.tone) : "") + '</div>';
+      const ops = document.createElement("div");
+      ops.className = "ops";
+      const spk = document.createElement("button");
+      spk.className = "icon-btn";
+      spk.title = "朗读";
+      spk.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L13 19V5L7.5 9.5H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>';
+      spk.onclick = () => speak(c.en);
+      const del = document.createElement("button");
+      del.className = "icon-btn";
+      del.title = "删除";
+      del.innerHTML = '<svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M7 7l1 12h8l1-12"/></svg>';
+      del.onclick = () => {
+        state.cards = state.cards.filter(x => x.id !== c.id);
+        saveState(); renderLibrary(); renderStats(); renderToday();
+        toast("已删除");
+      };
+      ops.appendChild(spk); ops.appendChild(del);
+      item.appendChild(txt); item.appendChild(ops);
+      g.appendChild(item);
+    });
+    body.appendChild(g);
+  });
+}
+
+/* ===================== 设置 ===================== */
+function renderSettings(){
+  const s = state.settings;
+  document.querySelectorAll(".radio[data-engine]").forEach(b => {
+    b.classList.toggle("on", b.dataset.engine === s.engine);
+  });
+  $("setBaseUrl").value = s.baseUrl || "";
+  $("setModel").value = s.model || "";
+  $("setKey").value = s.key || "";
+  $("setLevel").value = s.level;
+  $("setTone").value = s.tone;
+  $("setRate").value = s.rate;
+  $("rateVal").textContent = Number(s.rate).toFixed(2) + "×";
+  if($("setVoice") && !$("setVoice").options.length) loadVoices();
+  if($("setVoice") && s.voiceName) $("setVoice").value = s.voiceName;
+  const kb = Math.round((JSON.stringify(state).length) / 1024 * 10) / 10;
+  $("dataNote").textContent = "当前 " + state.cards.length + " 句，占用约 " + kb + " KB；数据只存在本机。";
+}
+
+function bindSettings(){
+  document.querySelectorAll(".radio[data-engine]").forEach(b => {
+    b.onclick = () => { state.settings.engine = b.dataset.engine; saveState(); renderSettings(); refreshHint(); };
+  });
+  const persist = (key, el, cast) => {
+    if(!$(el)) return;
+    $(el).addEventListener("change", () => {
+      state.settings[key] = cast ? cast($(el).value) : $(el).value;
+      saveState(); refreshHint();
+    });
+  };
+  persist("baseUrl","setBaseUrl");
+  persist("model","setModel");
+  persist("key","setKey");
+  persist("level","setLevel");
+  persist("tone","setTone");
+  persist("voiceName","setVoice");
+  if($("setRate")){
+    $("setRate").addEventListener("input", () => {
+      $("rateVal").textContent = Number($("setRate").value).toFixed(2) + "×";
+    });
+    $("setRate").addEventListener("change", () => {
+      state.settings.rate = Number($("setRate").value);
+      saveState();
+    });
+  }
+  if($("setKey")){
+    $("setKey").addEventListener("input", () => {
+      state.settings.key = $("setKey").value.trim();
+      saveState(); refreshHint();
+    });
+  }
+  if($("setBaseUrl")) $("setBaseUrl").addEventListener("input", () => { state.settings.baseUrl = $("setBaseUrl").value.trim(); saveState(); });
+  if($("setModel")) $("setModel").addEventListener("input", () => { state.settings.model = $("setModel").value.trim(); saveState(); });
+
+  $("exportBtn").onclick = () => {
+    const blob = new Blob([JSON.stringify({app:"SceneTalk", exportedAt:new Date().toISOString(), cards:state.cards, settings:state.settings}, null, 2)], {type:"application/json"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "scenetalk-" + todayStr() + ".json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+    toast("已导出 " + state.cards.length + " 句");
+  };
+  $("importBtn").onclick = () => $("importFile").click();
+  $("importFile").onchange = e => {
+    const f = e.target.files && e.target.files[0];
+    if(!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try{
+        const data = JSON.parse(String(reader.result));
+        const incoming = Array.isArray(data) ? data : (data.cards || []);
+        let added = 0;
+        incoming.forEach(c => {
+          if(!c || !c.en) return;
+          if(state.cards.some(x => x.en === c.en)) return;
+          state.cards.push(Object.assign({id:uid(), createdAt:todayStr(), box:0, due:todayStr()}, c, {id:uid()}));
+          added++;
+        });
+        saveState(); renderStats(); renderToday(); renderLibrary(); renderSettings();
+        toast("导入 " + added + " 句");
+      }catch(err){ toast("文件读不懂，需要 SceneTalk 导出的 JSON"); }
+    };
+    reader.readAsText(f);
+    e.target.value = "";
+  };
+  $("clearBtn").onclick = () => {
+    if(!state.cards.length) return toast("本来就空的");
+    if(!confirm("要清空全部 " + state.cards.length + " 句吗？删掉就找不回来了，建议先导出。")) return;
+    state.cards = [];
+    saveState(); renderStats(); renderToday(); renderLibrary(); renderSettings();
+    toast("已清空");
+  };
+}
+
+/* ===================== 交互绑定 ===================== */
+function bindTalk(){
+  $("micBtn").onclick = toggleMic;
+  $("genBtn").onclick = () => generate(false);
+  $("anotherBtn").onclick = () => generate(true);
+  $("speakBtn").onclick = () => { if(currentItem) speak(currentItem.en); };
+  $("slowBtn").onclick = () => { if(currentItem) speak(currentItem.en, Math.min(0.75, Number(state.settings.rate))); };
+  $("favBtn").onclick = () => {
+    if(!currentItem) return;
+    const c = state.cards.find(x => x.en === currentItem.en);
+    if(c){ c.star = !c.star; saveState(); toast(c.star ? "已标记为重点句" : "取消重点"); }
+    else { remember(currentItem, lastInput); toast("已存进语料库，明天开始复习"); }
+    updateFavBtn(); renderStats(); renderToday();
+  };
+  $("sampleBtn").onclick = () => {
+    const pool = state.scenario ? ALL_ITEMS.filter(i => i.s === state.scenario) : ALL_ITEMS;
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    $("zhInput").value = pick.zh;
+    showCard(pick, pick.zh);
+    remember(pick, pick.zh);
+    renderToday(); renderStats();
+  };
+  $("zhInput").addEventListener("keydown", e => {
+    if((e.ctrlKey || e.metaKey) && e.key === "Enter"){ e.preventDefault(); generate(false); }
+  });
+  $("libSearch").addEventListener("input", renderLibrary);
+}
+
+/* 与本地服务心跳：窗口关掉后服务自动退出 */
+function heartbeat(){
+  try{ fetch("/api/beat", {method:"POST"}).catch(() => {}); }catch(e){}
+}
+
+/* ===================== 启动 ===================== */
+function boot(){
+  renderChips();
+  refreshHint();
+  renderToday();
+  renderStats();
+  bindTalk();
+  bindSettings();
+  renderSettings();
+  go(currentView());
+  heartbeat();
+  setInterval(heartbeat, 8000);
+  if(!SRClass){
+    $("micBtn").title = "此窗口不支持语音识别，打字后按 Ctrl+Enter";
+    $("engineHint").textContent += " · 语音识别不可用，请用打字";
+  }
+}
+boot();
+</script>
+</body>
+</html>
