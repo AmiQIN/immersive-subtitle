@@ -1,7 +1,9 @@
 # ========== 构建产物 / 依赖（体积巨大，绝不入库）==========
 Oversub/dist/
+Oversub/dist_new/
 Oversub/_internal/
 Oversub/build/
+Oversub/build_new/
 Oversub/cuda_libs/
 Oversub/models/
 Oversub/tts_cache/
