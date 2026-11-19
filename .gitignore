@@ -1,6 +1,7 @@
 # ========== 构建产物 / 依赖（体积巨大，绝不入库）==========
 Oversub/dist/
 Oversub/dist_new/
+Oversub/dist_old/
 Oversub/_internal/
 Oversub/build/
 Oversub/build_new/
@@ -36,4 +37,4 @@ Thumbs.db
 desktop.ini
 
 # ========== 内部评审 / 开发笔记（含本机路径，绝不入库）==========
-*评审报告.md
+*评审*.md

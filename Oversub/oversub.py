@@ -4,6 +4,7 @@
 """
 
 import json
+import http.server
 import os
 import queue
 import re
@@ -24,6 +25,40 @@ PAIR_PATH = ROOT / "pairs.jsonl"
 REVIEW_PATH = ROOT / "review.jsonl"
 TEMPLATE_PATH = ROOT / "templates.json"
 TTS_DIR = ROOT / "tts_cache"
+
+_SCENETALK_SRV = {"port": 0, "srv": None}
+
+
+class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    """只给情景译页面用：本机回环、不写访问日志。"""
+
+    def log_message(self, *args):
+        pass
+
+
+def scenetalk_port():
+    """把 SceneTalk 目录挂到 127.0.0.1 的临时端口。
+
+    页面必须走 http 源：file:// 下 Chromium 会禁掉 localStorage，
+    语料库会存不进去；麦克风等安全上下文能力也要求 localhost。
+    """
+    if _SCENETALK_SRV["port"]:
+        return _SCENETALK_SRV["port"]
+    import functools
+    # 源码运行在 Oversub\ 下，页面在项目根的 SceneTalk\；打包后页面会被拷进程序目录
+    cands = [os.path.join(str(ROOT), "SceneTalk"),
+             os.path.join(os.path.dirname(str(ROOT)), "SceneTalk"),
+             os.path.join(str(ROOT), "web", "SceneTalk")]
+    root = next((c for c in cands
+                 if os.path.isfile(os.path.join(c, "SceneTalk.html"))), None)
+    if not root:
+        raise RuntimeError("找不到 SceneTalk.html（应在 SceneTalk\\ 目录下）")
+    srv = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), functools.partial(_QuietHandler, directory=root))
+    _SCENETALK_SRV["srv"] = srv
+    _SCENETALK_SRV["port"] = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return _SCENETALK_SRV["port"]
 
 # 全局热键：默认 Ctrl+Alt+G（全部可在设置里改）
 HOTKEY_ID = 0xB001
@@ -152,6 +187,7 @@ DEFAULT_CONFIG = {
     "model": "",
     "api_key": "",
     "whisper_model": "auto",     # auto = 有显卡优先 medium（本地有模型时），否则 turbo；无显卡 small
+    "hotwords_custom": "",       # 自定义热词：常被听错的人名/术语/网络词，空格分隔，会并入 ASR 偏置
     "device": "auto",
     "show_source": True,
     "font_size": 22,
@@ -163,7 +199,10 @@ DEFAULT_CONFIG = {
     "sensitivity": 0.006,
     "hold_scale": 1.0,
     "show_overlay": True,
-    "overlay_pos": "bottom",      # bottom / bottom_high / top / free：字幕条出现的位置
+    "overlay_pos": "top",         # bottom / bottom_high / top / free：字幕条出现的位置（默认顶部锚定）
+    "overlay_style": "dialog",    # dialog = Galgame 对话框（高度恒定、底边死锁）｜ banner = 旧自适应条
+    "overlay_dialog_h": 0,        # 对话框固定高度；0 = 按字号自动算（约 3 行正文）
+    "overlay_gap_top": 8,         # 顶部锚定时离屏幕上沿的像素；调大可避开游戏 HUD
     "diarize": False,
     "max_speakers": 4,
     "spk_mode": "balanced",       # strict / balanced / loose
@@ -194,6 +233,9 @@ DEFAULT_CONFIG = {
     "word_hl": True,              # 朗读时逐词高亮
     "click_through": True,        # 常态下字幕条对鼠标穿透（热键才接管）
     "asr_quality": "accurate",    # accurate = beam5+VAD，fast = beam1
+    # 热词是提示词：喂太多，静音时模型会照着词表“念”出来（没说却识别出设定词）。
+    # off = 完全不用；custom = 只用你自己填的词（默认）；full = 内置词表 + 上一句实词
+    "asr_hotwords_mode": "custom",
     "latency_mode": "balanced",   # fast 3.6s / balanced 5s / accurate 6.5s 语音强切；断句静音同步调整
     # 全局热键一律用 Ctrl+Alt+字母：避开 F1~F12（游戏技能/存档）、Ctrl+L（浏览器地址栏）、
     # Ctrl+,（VS Code 设置）这类主流应用占用率很高的键。全部可在设置里改。
@@ -257,8 +299,8 @@ DEFAULT_CONFIG = {
     "overlay_bilingual": False,         # 悬浮条对照模式：中文 ｜ 英文 并排（默认关）
     "filter_short": True,               # 过滤过短识别（单字 / 语气词）
     "min_chars": 2,                     # 中文至少几个字才记录、上字幕
-    "source_lang": "zh",                # 源语言（ASR 抓的语言），现阶段固定中文
-    "target_lang": "en",                # 目标语言（译文输出），现阶段只启用英语
+    "source_lang": "zh",                # 源语言（ASR 抓的语言）：zh / en，跟随目标语言自动配对
+    "target_lang": "en",                # 目标语言（译文输出）：en / zh，切到中文即英文识别+中文翻译
     "rtl_overlay": False,               # 右到左渲染开关（阿拉伯语/希伯来语预留）
     "font_family": "",                  # 全局兜底字体；空 = 各语种自己的推荐字体
     "lang_fonts": {},                   # 各语种独立渲染字体
@@ -830,6 +872,9 @@ SCENE_SHORT = {"fps": "FPS", "video": "影视", "chat": "闲聊", "": "未标"}
 # 每条：名称 / 原生写法 / ASR 模型包 / 翻译模型包 / TTS 标识 / 文字方向 / 是否可用
 # 现在只启用英语；其他语种先占位，设置里显示「未安装」，点了给下载指引，不影响当前使用。
 LANG_REGISTRY = {
+    "zh": {"name": "中文", "native": "中文", "asr": "faster-whisper-zh",
+           "mt": "argos-en-zh", "tts": "SAPI zh-CN（Huihui）", "rtl": False,
+           "installed": True, "dict": "zh"},
     "en": {"name": "英语", "native": "English", "asr": "faster-whisper-small",
            "mt": "argos-zh-en", "tts": "SAPI en-US（Zira）", "rtl": False,
            "installed": True, "dict": "en"},
@@ -855,13 +900,80 @@ LANG_REGISTRY = {
 SOURCE_LANGS = {
     "zh": {"name": "中文", "native": "中文", "asr": "faster-whisper-small",
            "installed": True, "rtl": False, "unit": "char", "font": "Microsoft YaHei"},
+    "en": {"name": "英语", "native": "English", "asr": "faster-whisper-small",
+           "installed": True, "rtl": False, "unit": "word", "font": "Segoe UI"},
 }
 # 补默认：字符计数单位 / 推荐字体（防日韩文、西里尔文方块乱码）
 for _code, _m in LANG_REGISTRY.items():
     _m.setdefault("unit", "char" if _code in ("ja", "ko", "zh") else "word")
-    _m.setdefault("font", {"en": "Segoe UI", "ja": "Yu Gothic UI", "ko": "Malgun Gothic",
+    _m.setdefault("font", {"en": "Segoe UI", "zh": "Microsoft YaHei",
+                           "ja": "Yu Gothic UI", "ko": "Malgun Gothic",
                            "fr": "Segoe UI", "de": "Segoe UI", "es": "Segoe UI",
                            "ar": "Segoe UI"}.get(_code, "Segoe UI"))
+
+# 每个语种的识别热词：只做词形偏置，不堆成完整句子，避免占满解码上下文。
+# 后半段刻意放同音混淆高发词（萝莉/罗列、上线/上先这类），比补通用词更能纠偏。
+ASR_HOTWORDS = {
+    "zh": ("反恐精英 拆包 下包 中路 长道 短道 闪光弹 烟雾弹 燃烧弹 爆头 残局 "
+           "保枪 经济局 转点 大狙 沙鹰 炼狱小镇 荒漠迷城 炙热沙城 核子危机 "
+           "香蕉道 警家 匪家 拱门 跳台 棺材 VIP 书房 市场 锅炉房 下水道 阳台 "
+           "连接 A大 A小 B点 中门 小道 拉枪 补枪 直架 突破 残血 空枪 压枪 扫射 "
+           "鸟狙 连狙 强起 假拆 爆弹 高闪 背闪 干拉 掩体 复活 护甲 "
+           "萝莉 御姐 二次元 手办 番剧 声优 同人 弹幕 立绘 抽卡 保底 氪金 "
+           "掉率 副本 上线 掉线 卡顿 延迟 外挂 账号 匹配 队友 "
+           "吃饭 睡觉 上班 下班 加班 开会 需求 工资 房租 快递 外卖"),
+    "en": ("counter-terrorist defuse mid long short flash smoke molotov headshot "
+           "clutch save eco rotate AWP Deagle banana arch ramp pit heaven market "
+           "connector stairs window drop peek trade anchor rush retake "
+           "loli anime cosplay figure episode stream queue lag ping buff nerf"),
+}
+
+# Whisper 在静音段 / 纯音乐 / 游戏环境音上最爱吐的“整句幻觉”。
+# 只在整句（去标点后）就是这些词时丢；"hot" 出现在 "hot Desert Eagle" 里是正常词，不能误杀。
+ASR_HALLUC_SHORT = {
+    "thank you", "thanks", "thank you very much", "thanks a lot", "bye", "bye bye",
+    "you", "hot", "so", "yeah", "okay", "ok", "music", "applause", "silence",
+    "谢谢观看", "谢谢大家", "谢谢", "字幕", "请不吝点赞", "感谢收看",
+}
+# 片尾字幕 / 订阅引导类：短句里命中即丢（长句保留，可能是真的在聊）
+ASR_HALLUC_FRAG = (
+    "请不吝点赞", "点赞 订阅", "订阅 转发", "字幕由", "字幕组", "打赏",
+    "优优独播", "独播剧场", "中文字幕", "字幕提供", "字幕下载",
+    "subtitles by", "amara.org", "thanks for watching", "please subscribe",
+    "like and subscribe", "subscribe to",
+)
+# 设置面板和速查面板共用这一份，改键位只改这里，不会两边对不上。
+HOTKEY_SPECS = (
+    ("hotkey_toggle", "切换字幕交互模式", "Ctrl+Alt+G（避开 QQ 的 Ctrl+Alt+Z）", "字幕"),
+    ("hotkey_f7_sub", "显示/隐藏字幕", "Ctrl+Alt+B（原 F7）", "字幕"),
+    ("hotkey_f8_drawer", "字幕历史抽屉", "Ctrl+Alt+J（原 F8）", "字幕"),
+    ("hotkey_subtitle", "开/关字幕显示", "Ctrl+Alt+V，屏幕想干净就一键收掉；识别照跑", "字幕"),
+    ("hotkey_f5_capture", "开始/暂停捕获", "Ctrl+Alt+P（原 F5 在游戏里常是快速存档）", "捕获"),
+    ("hotkey_capture", "开/关音频识别", "Ctrl+Alt+R，彻底停采集，省 CPU", "捕获"),
+    ("hotkey_clear", "清空字幕流", "Ctrl+Alt+X", "捕获"),
+    ("hotkey_fav_last", "收藏上一句", "Ctrl+Alt+D，纯键盘存档", "收藏"),
+    ("hotkey_f6_fav", "收藏当前句", "Ctrl+Alt+U（原 F6）", "收藏"),
+    ("hotkey_fav_easy", "收藏并标「简单」", "Ctrl+Alt+1", "收藏"),
+    ("hotkey_fav_mid", "收藏并标「中等」", "Ctrl+Alt+2", "收藏"),
+    ("hotkey_fav_hard", "收藏并标「困难」", "Ctrl+Alt+3", "收藏"),
+    ("hotkey_f9_autoread", "开/关自动朗读", "Ctrl+Alt+Y（原 F9；避开 QQ 截图 Ctrl+Alt+A）", "朗读"),
+    ("hotkey_f10_mute", "紧急静音", "Ctrl+Alt+M（原 F10），清队并暂停朗读", "朗读"),
+    ("hotkey_library", "跳到语言库", "Ctrl+Alt+L，直接抬出 Library 页", "学习"),
+    ("hotkey_selftest", "切换自测模式", "Ctrl+Alt+T，学习时一键遮住译文", "学习"),
+    ("hotkey_history", "侧边历史面板", "Ctrl+Alt+H，全屏抓不住光标时的后备入口", "学习"),
+    ("hotkey_panic", "强制退出交互", "Ctrl+Alt+Q，逃生键：光标卡在字幕层一按就还回去", "应急"),
+    ("hotkey_ctrl_lab", "打开设置面板", "Ctrl+Alt+,（不再用 VS Code 的 Ctrl+,）", "应急"),
+    ("hotkey_ctrl_l", "（旧 Ctrl+L，默认停用）", "留空不绑定；浏览器地址栏就是 Ctrl+L", "应急"),
+)
+HOTKEY_GROUP_ORDER = ("字幕", "捕获", "收藏", "朗读", "学习", "应急")
+HOTKEY_GROUP_HINT = {
+    "字幕": "字幕条怎么显示、怎么让鼠标回到游戏",
+    "捕获": "开始/暂停抓取，以及清屏",
+    "收藏": "不切窗口也能把这一句存进语言库",
+    "朗读": "TTS 自动朗读与紧急静音",
+    "学习": "跳到语言库、自测、历史面板",
+    "应急": "出问题时的一键退出",
+}
 
 # 当前生效的语种对：写记录时统一从这里取，避免各处再拼 zh/en
 CURRENT_LANGS = {"sl": "zh", "tl": "en"}
@@ -870,8 +982,12 @@ CURRENT_LANGS = {"sl": "zh", "tl": "en"}
 def set_langs(cfg):
     sl = str((cfg or {}).get("source_lang") or "zh")
     tl = str((cfg or {}).get("target_lang") or "en")
-    CURRENT_LANGS["sl"] = sl if sl in SOURCE_LANGS else "zh"
-    CURRENT_LANGS["tl"] = tl if tl in LANG_REGISTRY else "en"
+    sl = sl if sl in SOURCE_LANGS else "zh"
+    tl = tl if tl in LANG_REGISTRY else "en"
+    if sl == tl:                 # 源和目标撞车时，源自动换成另一种可用源语言
+        sl = "en" if sl != "en" else "zh"
+    CURRENT_LANGS["sl"] = sl
+    CURRENT_LANGS["tl"] = tl
     return CURRENT_LANGS
 
 
@@ -2442,10 +2558,16 @@ def _bad_repeat(en):
     return False
 
 
-def translate_guarded(tr, zh):
-    """整句先翻；退化成复读就按逗号/句号拆开逐段翻，再拼回去。"""
+def translate_guarded(tr, zh, sl="zh", tl="en"):
+    """整句先翻；退化成复读就按逗号/句号拆开逐段翻，再拼回去。
+    源语言不是中文时走直翻：游戏术语替换和英文复读检测都不适用。"""
     if tr is None:
         return ""
+    if str(sl) != "zh":
+        try:
+            return (tr.translate(zh) or "").strip()
+        except Exception:
+            return ""
     import re as _re
     src = prep_zh_for_translation(zh)
     try:
@@ -2628,22 +2750,26 @@ class Pipeline(threading.Thread):
 
         # 2 秒极低幅噪，逼它真做一次推理：显卡缺 cuBLAS/cuDNN 的错误在推理时才暴露
         dummy = (np.random.uniform(-0.02, 0.02, 32000)).astype("float32")
+        sl_pre = str(CURRENT_LANGS.get("sl") or "zh")
         for nm in names:
             for dev, ct in attempts:
                 try:
                     self.ui.put(("state", "正在加载识别模型 %s…" % nm, ""))
                     m = WhisperModel(nm, device=dev, compute_type=ct)
-                    list(m.transcribe(dummy, language="zh", beam_size=1, vad_filter=False))
+                    list(m.transcribe(dummy, language=sl_pre, beam_size=1, vad_filter=False))
                     # VAD 的 onnx 是懒加载：不预热的话，第一句真实语音要额外等 1.3～1.5 秒。
                     # 用同一段极低幅噪把 VAD 也跑一次，首句就和后续一样快。
                     try:
-                        list(m.transcribe(dummy, language="zh", beam_size=1, vad_filter=True,
-                                          vad_parameters=dict(min_silence_duration_ms=500,
-                                                              speech_pad_ms=300)))
+                        list(m.transcribe(dummy, language=sl_pre, beam_size=1, vad_filter=True,
+                                          vad_parameters=dict(min_silence_duration_ms=450,
+                                                              speech_pad_ms=420)))
                     except Exception as e:
                         log("VAD 预热失败（不影响识别）：%r" % e)
                     log("Whisper 就绪：%s / %s / %s" % (nm, dev, ct))
-                    self.ui.put(("state", "识别就绪（%s · %s）" % (nm, dev), "ok"))
+                    # 记下真正加载成功的模型，状态栏显示实际档位，而不是配置里的 auto
+                    self.asr_model_loaded = os.path.basename(str(nm).rstrip("\\/")) or str(nm)
+                    self.asr_device = dev
+                    self.ui.put(("state", "识别就绪（%s · %s）" % (self.asr_model_loaded, dev), "ok"))
                     return m
                 except Exception as e:
                     log("Whisper(%s/%s/%s) 不可用：%r" % (nm, dev, ct, e))
@@ -2660,19 +2786,39 @@ class Pipeline(threading.Thread):
                 return None
             raise
         langs = argos.get_installed_languages()
-        src = next((l for l in langs if l.code == "zh"), None)
-        dst = next((l for l in langs if l.code == "en"), None)
+        sl = CURRENT_LANGS.get("sl", "zh")
+        tl = CURRENT_LANGS.get("tl", "en")
+        src = next((l for l in langs if l.code == sl), None)
+        dst = next((l for l in langs if l.code == tl), None)
+        # 双向都建：说话时语种会来回切，方向必须按句挑，只锁一个包就会出现“英文不翻中文”
+        self.tr_map = {}
+        for a, b in ((sl, tl), (tl, sl)):
+            la = next((l for l in langs if l.code == a), None)
+            lb = next((l for l in langs if l.code == b), None)
+            if la is None or lb is None:
+                continue
+            try:
+                t2 = la.get_translation(lb)
+            except Exception:
+                t2 = None
+            if t2 is not None:
+                self.tr_map[(a, b)] = t2
         if not src or not dst:
             if self.cfg.get("engine") == "online" and self.cfg.get("api_key"):
                 log("离线备用翻译没装：在线引擎仍可用")
                 return None
-            raise RuntimeError("离线翻译包没装：中→英语言包缺失")
-        tr = src.get_translation(dst)
+            raise RuntimeError("离线翻译包没装：%s→%s 语言包缺失" % (sl, tl))
+        tr = self.tr_map.get((sl, tl)) or src.get_translation(dst)
         if tr is None:
             if self.cfg.get("engine") == "online" and self.cfg.get("api_key"):
                 return None
-            raise RuntimeError("离线翻译包没装：中→英路径不存在")
-        tr.translate("你好")   # 预热，不然第一句字幕要等十几秒
+            raise RuntimeError("离线翻译包没装：%s→%s 路径不存在" % (sl, tl))
+        # 两个方向都预热一次，不然切方向后的第一句要等十几秒
+        for (a, b), t2 in self.tr_map.items():
+            try:
+                t2.translate("你好" if a == "zh" else "hello")
+            except Exception:
+                pass
         if self.cfg.get("engine") == "online" and self.cfg.get("api_key"):
             self.fallback_tr = tr          # 网络抖动时无缝切回本地
             log("离线备用翻译就绪（在线优先）")
@@ -2680,17 +2826,26 @@ class Pipeline(threading.Thread):
         log("离线翻译就绪")
         return tr
 
-    def _translate_online(self, text):
+    def _translate_online(self, text, sl=None, tl=None):
         import urllib.request
         base = (self.cfg.get("base_url") or "").rstrip("/")
         if not base:
             return None
+        sl_cur = sl or CURRENT_LANGS.get("sl", "zh")
+        tl_cur = tl or CURRENT_LANGS.get("tl", "en")
+        if sl_cur == "en" and tl_cur == "zh":
+            sys_prompt = ("你是字幕翻译。把英文口语翻成简洁自然的简体中文字幕："
+                          "只输出中文正文，不加引号、不加解释，保留说话人的口气，"
+                          "游戏术语用玩家习惯的说法。")
+        else:
+            sys_prompt = ("你是影视字幕翻译。把中文翻成简洁自然的英语字幕：只输出英文正文，"
+                          "不加引号、不加解释，一句尽量不超过 20 个词，保留说话人的口气。")
         body = json.dumps({
             "model": self.cfg.get("model") or "deepseek-chat",
             "temperature": 0.2,
             "max_tokens": 400,
             "messages": [
-                {"role": "system", "content": "你是影视字幕翻译。把中文翻成简洁自然的英语字幕：只输出英文正文，不加引号、不加解释，一句尽量不超过 20 个词，保留说话人的口气。"},
+                {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": text},
             ],
         }).encode("utf-8")
@@ -2714,29 +2869,60 @@ class Pipeline(threading.Thread):
             audio = np.clip(x, -1.0, 1.0)
         except Exception:
             pass
-        # 口音、方言、游戏术语会显著拉低 small 的命中率：给一段固定的简体中文提示词，
-        # 不做“翻译成英文”，同时用热词表把常见战术词往正确写法上引。
-        prompt = ("以下是普通话口语，可能有方言口音、游戏术语、英文人名和枪械名。"
-                  "请按简体中文逐字转写，保留口语词，不要翻译。")
-        hotwords = ("反恐精英 拆包 下包 中路 长道 短道 闪光弹 烟雾弹 燃烧弹 爆头 残局 "
-                    "保枪 经济局 转点 大狙 沙鹰 炼狱小镇 沙漠二 "
-                    "炼狱小镇 荒漠迷城 炙热沙城 核子危机 远古遗迹 列车停放站 死亡游乐园 "
-                    "殒命大厦 阿努比斯 香蕉道 警家 匪家 拱门 跳台 棺材 白车 VIP 书房 市场 "
-                    "锅炉房 下水道 阳台 连接 A大 A小 B点 中门 小道 拉枪 补枪 直架 架点 "
-                    "反清 清点 突破 残血 大残 空枪 压枪 扫射 点射 鸟狙 连狙 半起 强起 "
-                    "假拆 假下包 爆弹 高闪 背闪 背身 干拉 跳伞 落地 掩体 复活 护甲 电池 "
-                    "打药 传送 裂缝 空投 报点 集火 换弹 走位")
-        common = dict(language="zh", condition_on_previous_text=False,
+        # 先快速判语种：用户会中英混说，固定按配置语种解码会把英文当中文翻，
+        # 结果就是“说英文只出英文”。只采信 zh/en 且置信度够的结果，其余回退配置语种。
+        sl_cfg = CURRENT_LANGS.get("sl", "zh")
+        det, prob = sl_cfg, 0.0
+        try:
+            # 注意：这里不能传 vad_parameters=dict(...)，detect_language 只认 VadOptions，
+            # 传 dict 会抛 'dict' object has no attribute 'threshold'（实测 faster-whisper 1.2.1）
+            d, p, _alts = self.model.detect_language(audio, vad_filter=True)
+            if float(p) >= 0.55 and d in ("zh", "en"):
+                det, prob = d, float(p)
+        except Exception as e:
+            log("语种检测失败，按配置语种识别：" + repr(e))
+        self.last_det_lang = det
+        self.last_det_prob = prob
+        sl = det
+        # 热词是**提示词**，不是白名单：静音 / 听不清时模型会照着词表“念”，
+        # 于是出现“我没说阿鲁比斯，它却打出阿鲁比斯”。所以默认只吃用户自己填的词，
+        # 内置大词表和上一句实词都改成 opt-in（asr_hotwords_mode = custom / full / off）。
+        mode = str(self.cfg.get("asr_hotwords_mode") or "custom")
+        hotwords = ""
+        custom = re.sub(r"[，,、;；\n]+", " ", str(self.cfg.get("hotwords_custom") or "")).strip()
+        if mode in ("custom", "full"):
+            hotwords = custom
+        if mode == "full":
+            hotwords = (ASR_HOTWORDS.get(sl, "") + " " + custom).strip()
+            ctx = ""
+            try:
+                prev = str(self.last_zh or "").strip()
+                if prev and sl == "zh":
+                    ctx = re.sub(r"[。，！？、,.!?…\s”“]", "", prev)[-10:]
+                elif prev:
+                    ctx = " ".join(re.findall(r"[A-Za-z']+", prev)[-6:])
+            except Exception:
+                ctx = ""
+            if ctx:
+                hotwords = (hotwords + " " + ctx).strip()
+        # 热词会占解码上下文，超长反而拖慢且挤掉句子本身
+        hotwords = hotwords[:300]
+        common = dict(language=(sl if sl in ("zh", "en") else "zh"),
+                      condition_on_previous_text=False,
                       without_timestamps=True,
-                      hotwords=hotwords, temperature=[0.0, 0.2, 0.4],
+                      temperature=[0.0, 0.2, 0.4],
                       repetition_penalty=1.1, no_repeat_ngram_size=3)
+        if hotwords:
+            common["hotwords"] = hotwords
         # 不再给 initial_prompt：medium 在 3 秒左右的真实片段上会把提示词原样念出来
         # （实测出现“普通话口词”“保留口语”），比错一两个词更伤阅读。
         if str(self.cfg.get("asr_quality") or "accurate") == "fast":
             tries = [dict(beam_size=1, vad_filter=False)]
         else:
+            # 静音阈值从 500 降到 450：口语连读常被切在词中间，切碎后单个短片段解码
+            # 最容易出同音错词；补边从 300 提到 420，把句首尾的气口留给模型。
             tries = [dict(beam_size=5, vad_filter=True,
-                          vad_parameters=dict(min_silence_duration_ms=500, speech_pad_ms=300)),
+                          vad_parameters=dict(min_silence_duration_ms=450, speech_pad_ms=420)),
                      dict(beam_size=5, vad_filter=False),
                      dict(beam_size=1, vad_filter=False)]
         last = None
@@ -2759,6 +2945,23 @@ class Pipeline(threading.Thread):
                     if any(k in t for k in bad):
                         log("丢弃提示词幻觉段：%s" % t[:40])
                         continue
+                    # 整句幻觉（“hot”“Thank you.”）：静音 / 环境音解码出来的短句，
+                    # 不丢就会进翻译、进历史，看起来就像“莫名其妙翻译了一句”。
+                    core = re.sub(r"[\s。，,.!?！？、…~\"'‘’“”\-]+", " ", t).strip().lower()
+                    if core:
+                        if core in ASR_HALLUC_SHORT:
+                            log("丢弃整句幻觉：%s" % t[:30])
+                            continue
+                        if len(core) <= 12 and any(k in core for k in ASR_HALLUC_FRAG):
+                            log("丢弃片尾/订阅幻觉：%s" % t[:30])
+                            continue
+                        # 整句几乎只由词库里的词拼成：这是模型在念提示词，不是真在说话
+                        hw_src = ASR_HOTWORDS.get(sl, "").lower()
+                        if hw_src and 0 < len(core) <= 12:
+                            toks = [w for w in re.split(r"[^\w\u4e00-\u9fff]+", t) if w]
+                            if toks and all(w.lower() in hw_src for w in toks):
+                                log("丢弃词库幻觉：%s" % t[:30])
+                                continue
                     # 重复循环（“黄语语语语…”）：压缩比过高或同一字连续 5 次以上
                     cr = float(getattr(s, "compression_ratio", 0) or 0)
                     if (cr > 2.4 and len(t) >= 8) or re.search(r"(.)\1{4,}", t):
@@ -2785,21 +2988,34 @@ class Pipeline(threading.Thread):
             self.on_state("loading", "ASR 模型加载中…")
             self.model = self._load_whisper()
             self.on_state("asr_ready", "ASR 就绪：%s / %s" % (
-                self.cfg.get("whisper_model") or "small",
+                getattr(self, "asr_model_loaded", None) or self.cfg.get("whisper_model") or "small",
                 "CPU" if str(self.cfg.get("device") or "cpu").lower() == "cpu"
                 else str(self.cfg.get("device")).upper()))
             stage = "翻译模型"
             self.on_state("loading", "翻译模型加载中…")
             self.translator = self._load_translator()
+            def _tr2(text, sl=None, tl=None):
+                a = sl or CURRENT_LANGS.get("sl", "zh")
+                b = tl or ("en" if a == "zh" else "zh")
+                tr = (getattr(self, "tr_map", {}) or {}).get((a, b)) or self.translator
+                return translate_guarded(tr, text, a, b) if tr else ""
+
+            def _fb2(text, sl=None, tl=None):
+                a = sl or CURRENT_LANGS.get("sl", "zh")
+                b = tl or ("en" if a == "zh" else "zh")
+                tr = ((getattr(self, "tr_map", {}) or {}).get((a, b))
+                      or getattr(self, "fallback_tr", None))
+                return translate_guarded(tr, text, a, b) if tr else ""
+
             self.ts = TranslateWorker(self.cfg, self.ui, self.rec,
-                                      (lambda t: translate_guarded(self.translator, t))
-                                      if self.translator else None,
+                                      _tr2 if (getattr(self, "tr_map", None) or self.translator) else None,
                                       self._translate_online,
-                                      (lambda t: translate_guarded(self.fallback_tr, t))
-                                      if self.fallback_tr else None)
+                                      _fb2 if (getattr(self, "tr_map", None)
+                                               or getattr(self, "fallback_tr", None)) else None)
             self.ts.start()
             self.on_state("trans_ready", "翻译就绪：%s" % (
-                "在线接口" if self.cfg.get("engine") == "online" else "Argos 离线（中→英）"))
+                "在线接口" if self.cfg.get("engine") == "online"
+                else "Argos 离线（%s→%s）" % (CURRENT_LANGS["sl"], CURRENT_LANGS["tl"])))
             if self.cfg.get("diarize", False):
                 self.on_state("loading", "声纹模型加载中…")
                 self.spk_enc, thr = make_speaker_encoder()
@@ -2874,14 +3090,26 @@ class Pipeline(threading.Thread):
                             self.ui.put(("state", "这一句识别失败，继续下一句", "warn"))
                         continue
                 zh = "".join(s.text for s in segs).strip()
-                if self.t2s:
+                # 源语种取本句检测结果；目标默认按配置，只有撞车（同语言）才翻成对向。
+                # 说中文 → 出英文，说英文 → 出中文，配置不用手动切。
+                sl_now = getattr(self, "last_det_lang", None) or CURRENT_LANGS.get("sl", "zh")
+                tl_now = CURRENT_LANGS.get("tl", "en")
+                if sl_now == tl_now:
+                    tl_now = "en" if tl_now == "zh" else "zh"
+                if self.t2s and sl_now == "zh":
                     zh = self.t2s.convert(zh)      # 兜底：简体提示词失效时，硬转一遍
                 # Argos 会按句切分后再翻译；ASR 常把两句连成 "先别近 等我闪光" 不带标点，
-                # 模型只翻前半句。这里用逗号把口语停顿补回来，译文才不会少半截。
+                # 模型只翻前半句。这里用逗号把口语停顿补回来，译文才不会少半截（仅中文）
                 import re as _re
-                if zh and not _re.search(r"[，。！？、,.!?]", zh):
+                if sl_now == "zh" and zh and not _re.search(r"[，。！？、,.!?]", zh):
                     zh = _re.sub(r"\s+", "，", zh).strip("，") + "。"
-                if len(zh) < 2 or zh == self.last_zh:
+                if sl_now != "zh":
+                    # 空格分词语种按词数过滤，避免蹦出 "uh"、"ok" 这种碎片
+                    if len(split_words(zh, sl_now)) < int(self.cfg.get("min_words") or 2):
+                        continue
+                elif len(zh) < int(self.cfg.get("min_chars") or 2):
+                    continue
+                if zh == self.last_zh:
                     continue
                 # Whisper 在静音/纯音乐上爱幻觉出片尾字幕，直接丢掉
                 if any(b in zh for b in HALLUCINATION_WORDS):
@@ -2909,17 +3137,22 @@ class Pipeline(threading.Thread):
                 # 翻译交给独立线程：ASR 不等模型，队列里排着也不会卡住下一句识别
                 if self.ts is not None:
                     self.ts.submit({"zh": zh, "segs": segs, "spk": spk,
-                                    "item": item, "meta": meta})
+                                    "item": item, "meta": meta,
+                                    "sl": sl_now, "tl": tl_now})
                 else:
                     t0 = time.time()
                     try:
+                        sl_cur = sl_now
+                        tl_cur = tl_now
+                        tr_cur = (getattr(self, "tr_map", {}) or {}).get((sl_cur, tl_cur)) or self.translator
                         if self.cfg.get("engine") == "online" and self.cfg.get("api_key"):
-                            en = self._translate_online(prep_zh_for_translation(zh)) or ""
-                            if _bad_repeat(en) and self.translator is not None:
-                                en = translate_guarded(self.translator, zh)
+                            en = self._translate_online(
+                                prep_zh_for_translation(zh) if sl_cur == "zh" else zh,
+                                sl_cur, tl_cur) or ""
+                            if sl_cur == "zh" and _bad_repeat(en) and tr_cur is not None:
+                                en = translate_guarded(tr_cur, zh, sl_cur, tl_cur)
                         else:
-                            en = (translate_guarded(self.translator, zh)
-                                  if self.translator else "")
+                            en = (translate_guarded(tr_cur, zh, sl_cur, tl_cur) if tr_cur else "")
                     except Exception as e:
                         log("翻译失败：" + repr(e))
                         en = ""
@@ -2969,31 +3202,35 @@ class TranslateWorker(threading.Thread):
             if job is None or self._stop.is_set():
                 break
             zh = job["zh"]
+            # 方向按句取：中文句走 zh→en，英文句走 en→zh，缓存也要按方向分开
+            sl_j = job.get("sl") or CURRENT_LANGS.get("sl", "zh")
+            tl_j = job.get("tl") or ("en" if sl_j == "zh" else "zh")
             t0 = time.time()
             en = None
-            hit = self.cache.get(zh)
+            ckey = (sl_j, tl_j, zh)
+            hit = self.cache.get(ckey)
             if hit and time.time() - hit[1] <= 5.0:
                 en = hit[0]
                 self.hits += 1
             if en is None:
                 try:
                     if self.cfg.get("engine") == "online" and self.cfg.get("api_key"):
-                        en = self.online_fn(zh) or ""
+                        en = self.online_fn(zh, sl_j, tl_j) or ""
                     else:
-                        en = self.tr_fn(zh) if self.tr_fn else ""
+                        en = self.tr_fn(zh, sl_j, tl_j) if self.tr_fn else ""
                 except Exception as e:
                     log("在线翻译失败，切本地离线：" + repr(e))
                     en = ""
                     if self.fb_fn is not None:
                         try:
-                            en = self.fb_fn(zh) or ""
+                            en = self.fb_fn(zh, sl_j, tl_j) or ""
                             if en and not self._fell_back:
                                 self._fell_back = True
                                 self.ui.put(("state", "网络不稳，已无缝切到离线翻译", "warn"))
                         except Exception as e2:
                             log("离线备用也失败：" + repr(e2))
                 if en:
-                    self.cache[zh] = (en, time.time())
+                    self.cache[ckey] = (en, time.time())
                     if len(self.cache) > 200:
                         for k in list(self.cache)[:100]:
                             self.cache.pop(k, None)
@@ -3302,7 +3539,14 @@ class Overlay:
         self.win.setAttribute(Qt.WA_TranslucentBackground, True)
         self.win.setWindowOpacity(1.0)        # 整窗不透明，透明只作用在卡片底色上，文字永远清晰
         self.MARGIN = 18                      # 给投影留的余量
-        self.win.resize(int(win.get("w") or 1000), int(win.get("h") or 150))
+        # Galgame 对话框形态：占屏宽约 76%（640–1200），不铺满整行；高度按 _dialog_h 恒定
+        try:
+            from PySide6.QtGui import QGuiApplication
+            _sw = QGuiApplication.primaryScreen().availableGeometry().width()
+        except Exception:
+            _sw = 1600
+        _dw = int(min(1200, max(640, _sw * 0.76)))
+        self.win.resize(int(win.get("w") or _dw), int(win.get("h") or self._dialog_h()))
         self.win.move(int(win.get("x") or 400), int(win.get("y") or 820))
         self.win.setWindowTitle("Oversub 沉浸字幕")
 
@@ -3342,11 +3586,14 @@ class Overlay:
 
         self.spk_label = QLabel("")
         self.spk_label.setFont(self._font(10, True, "Microsoft YaHei"))
-        self.spk_label.setStyleSheet("color:#7BC39B;padding:0 6px 0 0;")
+        # Galgame 对话框里的说话人胶囊：淡底 + 圆角，名字像“铭牌”挂在正文上方
+        self.spk_label.setStyleSheet(
+            "color:#7BC39B;background:rgba(123,195,155,28);"
+            "border-radius:8px;padding:1px 8px;")
         self.spk_label.setVisible(False)
         bar.addWidget(self.spk_label)
 
-        self.btn_pause = QPushButton("暂停")
+        self.btn_pause = QPushButton("开始")
         self.btn_settings = QPushButton("设置")
         self.btn_quit = QPushButton("关闭")
         self.btn_quit.setObjectName("quit")
@@ -3396,6 +3643,45 @@ class Overlay:
         self.btn_star.setToolTip("收藏整句")
         self.btn_star.clicked.connect(self._fav_current)
         self.btn_star.hide()
+
+        # 穿透态抓手：字幕条本体整窗穿透（不挡游戏点击），旁边挂一个始终能点的小胶囊，
+        # ⋯ 进入交互模式、☆ 一键收藏当前句。原来要靠热键进模式再找星标，游戏里太绕。
+        self.hit = QWidget()
+        self.hit.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.hit.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.hit.setWindowTitle("Oversub 快捷操作")
+        _hl = QHBoxLayout(self.hit)
+        _hl.setContentsMargins(0, 0, 0, 0)
+        _hl.setSpacing(2)
+        _hit_qss = ("QPushButton{background-color:rgba(20,22,26,230);color:#D8D3C9;"
+                    "border:1px solid rgba(255,255,255,40);border-radius:8px;"
+                    "font-size:13px;padding:0px;}"
+                    "QPushButton:hover{background-color:rgba(70,76,86,240);color:#FFFFFF;}")
+        self.btn_hit_more = QPushButton("⋯")
+        self.btn_hit_more.setFixedSize(26, 22)
+        self.btn_hit_more.setFlat(True)
+        self.btn_hit_more.setCursor(Qt.PointingHandCursor)
+        self.btn_hit_more.setStyleSheet(_hit_qss)
+        self.btn_hit_more.setToolTip("点一下进入交互模式（可选中字幕、拖宽、展开历史）")
+        self.btn_hit_more.clicked.connect(lambda: self.set_interactive(True))
+        self.btn_hit_anchor = QPushButton("⇅")
+        self.btn_hit_anchor.setFixedSize(26, 22)
+        self.btn_hit_anchor.setFlat(True)
+        self.btn_hit_anchor.setCursor(Qt.PointingHandCursor)
+        self.btn_hit_anchor.setStyleSheet(_hit_qss)
+        self.btn_hit_anchor.setToolTip("一键把字幕条换到屏幕顶部 / 底部（挡到 HUD 时用）")
+        self.btn_hit_anchor.clicked.connect(self._toggle_anchor)
+        self.btn_hit_fav = QPushButton("☆")
+        self.btn_hit_fav.setFixedSize(26, 22)
+        self.btn_hit_fav.setFlat(True)
+        self.btn_hit_fav.setCursor(Qt.PointingHandCursor)
+        self.btn_hit_fav.setStyleSheet(_hit_qss)
+        self.btn_hit_fav.setToolTip("收藏当前这句（不用进交互模式）")
+        self.btn_hit_fav.clicked.connect(self._fav_current)
+        _hl.addWidget(self.btn_hit_anchor)
+        _hl.addWidget(self.btn_hit_more)
+        _hl.addWidget(self.btn_hit_fav)
+        self.hit.hide()
 
         self.toast = QLabel("", self.panel)
         self.toast.setFont(self._font(10, False, "Microsoft YaHei"))
@@ -3623,9 +3909,8 @@ class Overlay:
                 v = QVBoxLayout(w)
                 v.setContentsMargins(0, 0, 0, 0)
                 v.setSpacing(1)
-                lab = QLabel(en)
-                if self.cfg.get("overlay_bilingual", False) and zh:
-                    lab.setText("%s  ｜  %s" % (zh, en))
+                # 每行带序号：1 是最旧，数字越大越新，第一次看也知道往哪边读
+                lab = QLabel("%2d  %s" % (i + 1, en))
                 lab.setTextFormat(_Qt.PlainText)
                 lab.setWordWrap(True)
                 lab.setFont(self._font(en_size, False,
@@ -3642,18 +3927,17 @@ class Overlay:
                 lab.installEventFilter(self._filt)
                 v.addWidget(lab)
                 zh_h = 0
-                # 历史行默认只留英文：三句回看时中文译文会把字幕条堆得很高，
-                # 长句甚至顶出屏幕；中文只在当前句显示，回看靠英文就够。
-                if zh and self.cfg.get("overlay_hist_zh", False) \
-                        and self.cfg.get("show_source", True) \
-                        and not self.cfg.get("overlay_bilingual", False):
-                    z = QLabel(zh)
+                # 历史行强制双语：只留译文的话，回看时看不出这行原来是什么语言。
+                # 源文用小一号灰字，最多两行，免得把字幕条顶出屏幕。
+                if zh and self.cfg.get("show_source", True) \
+                        and str(zh).strip() != str(en).strip():
+                    z = QLabel(str(zh))
                     z.setTextFormat(_Qt.PlainText)
                     z.setWordWrap(True)
                     z.setFont(self._font(zh_size, False, "Microsoft YaHei"))
                     z.setStyleSheet("color:%s;background:transparent;" % zh_col)
                     z.setTextInteractionFlags(_Qt.NoTextInteraction)
-                    z.setFixedHeight(self._text_height(z, inner))
+                    z.setFixedHeight(min(self._text_height(z, inner), int(zh_size * 2.4)))
                     zh_h = z.height() + 1
                     v.addWidget(z)
                 w.setFixedHeight(lab.height() + zh_h)
@@ -4913,6 +5197,7 @@ class Overlay:
         self.mode_hint.setVisible(bool(on))
         self._apply_selectable(bool(on))
         self._apply_mode_visuals(bool(on))
+        self._sync_handle()          # 进交互收起抓手，退出交互再挂回来
         try:
             # 困难生词下划线只在交互模式画：非交互时画面上一点额外东西都没有
             self.dst_label.set_mark_mode(bool(on) and bool(self.cfg.get("hard_underline", True)))
@@ -5036,27 +5321,53 @@ class Overlay:
                 self.cfg["overlay_pos"] = str(preset)
             preset = str(self.cfg.get("overlay_pos") or "bottom")
             scr = self._avail_rect()
-            w, h = max(480, self.win.width()), max(100, self.win.height())
+            # 对话框模式：高度锁死在固定档位，留白按屏高比例算（换分辨率观感一致）
+            dialog = str(self.cfg.get("overlay_style") or "dialog") == "dialog"
+            gap = max(40, int(scr.height() * 0.055)) if dialog else 72
+            w = max(480, self.win.width())
+            if dialog:
+                h = self._dialog_h() if self._has_text() else 92
+            else:
+                h = max(100, self.win.height())
+            self.win.resize(w, h)
             if preset == "free":
                 win = self.cfg.get("window") or {}
                 x = int(win.get("x") or (scr.left() + (scr.width() - w) // 2))
-                y = int(win.get("y") or (scr.bottom() - h - 72))
+                y = int(win.get("y") or (scr.bottom() - h - gap))
                 self.win.move(x, y)
             else:
                 x = scr.left() + (scr.width() - w) // 2
                 if preset == "top":
-                    y = scr.top() + 96
+                    # 顶部固定 = 贴住屏幕上沿；留白只靠窗口自身的 MARGIN，
+                    # 不能再按屏高比例加 60px，否则看起来像“浮在中上”而不是顶住。
+                    # overlay_gap_top 让用户自己往下压一点，避开游戏顶部血条 / 任务 HUD。
+                    gap_top = int(self.cfg.get("overlay_gap_top") or 8)
+                    y = scr.top() + max(0, min(200, gap_top))
                 elif preset == "bottom_high":
-                    y = scr.bottom() - h - 200
+                    y = scr.bottom() - h - int(scr.height() * 0.16)
                 else:
-                    y = scr.bottom() - h - 72
+                    y = scr.bottom() - h - gap
                 self.win.move(x, y)
             self._clamp_to_screen()
+            self._sync_handle()
             if save:
                 self._remember_geometry()
                 save_config(self.cfg)
         except Exception as e:
             log("摆放字幕条失败：" + repr(e))
+
+    def _clamp_to_screen(self):
+        """把字幕条夹回可用屏幕区域：改分辨率、拔掉副屏、窗口记忆失效时都不让字幕跑出屏幕。"""
+        try:
+            scr = self._avail_rect()
+            w = max(1, self.win.width())
+            h = max(1, self.win.height())
+            x = min(max(scr.left(), self.win.x()), max(scr.left(), scr.right() - w))
+            y = min(max(scr.top(), self.win.y()), max(scr.top(), scr.bottom() - h))
+            if (x, y) != (self.win.x(), self.win.y()):
+                self.win.move(x, y)
+        except Exception as e:
+            log("字幕条位置收敛失败：" + repr(e))
 
     def _remember_geometry(self):
         try:
@@ -5254,9 +5565,33 @@ class Overlay:
             self.dst_label.setFont(self._font(max(13, int((self.cfg.get("font_size") or 22) * 0.72)),
                                               True, "Segoe UI"))
         else:
+            # 主体选“另一种语言”：说中文就主体英文（译文）、副行中文原文；
+            # 说英文就主体中文（译文）、副行英文原文。原来无论如何都只画 en，
+            # 说英文时等于只看到英文，中文永远不出现。
+            _cjk = re.compile(r"[\u4e00-\u9fff]")
+            en_is_cjk = bool(_cjk.search(str(en or "")))
+            zh_is_cjk = bool(_cjk.search(str(zh_new or "")))
+            if zh_is_cjk and not en_is_cjk:
+                main_txt, sub_txt = zh_new, en
+            elif en_is_cjk and not zh_is_cjk:
+                main_txt, sub_txt = en, zh_new
+            else:
+                main_txt, sub_txt = en, ""
             self.dst_label.setFont(self._font(int(self.cfg.get("font_size") or 22), True,
                                               "Segoe UI", 0.2))
-            self.dst_label.setText(en)
+            # 副行（另一种语言）走上方小字位，主体大字留在下面，读起来才知道哪句是译文
+            try:
+                fs_now = int(self.cfg.get("font_size") or 22)
+                if sub_txt and str(sub_txt).strip() != str(main_txt).strip():
+                    self.src_label.setFont(self._font(max(12, int(fs_now * 0.6)),
+                                                      False, "Microsoft YaHei"))
+                    self.src_label.setText(str(sub_txt))
+                    self.src_label.setVisible(bool(self.cfg.get("show_source", True)))
+                else:
+                    self.src_label.setText("")
+            except Exception:
+                pass
+            self.dst_label.setText(main_txt)
         self.dst_label.setProperty("sentence", en)
         self.dst_label.setProperty("zh", zh_new)
         try:
@@ -5333,8 +5668,66 @@ class Overlay:
         except Exception:
             pass
 
+    def _dialog_h(self):
+        """Galgame 对话框的固定高度：约 3 行正文 + 上下留白，跟着字号微调。"""
+        try:
+            n = int(self.cfg.get("overlay_dialog_h") or 0)
+        except Exception:
+            n = 0
+        if n >= 96:
+            return n
+        try:
+            fs = int(self.cfg.get("font_size") or 20)
+        except Exception:
+            fs = 20
+        return max(150, min(280, int(fs * 1.5 * 3) + 96))
+
+    def _toggle_anchor(self):
+        """抓手上的 ⇅：在顶部 / 底部之间来回换，专治挡住游戏 HUD 或挡往站立角色。"""
+        try:
+            cur = str(self.cfg.get("overlay_pos") or "top")
+            self.cfg["overlay_pos"] = "bottom_high" if cur == "top" else "top"
+            self.cfg.pop("window", None)
+            self.apply_position(save=True)
+            self._fit_height()
+            self._sync_handle()
+            self._show_toast("字幕条已移到" + ("下部" if self.cfg["overlay_pos"] == "bottom_high"
+                                           else "顶部"))
+            log("字幕条锚点切换：" + str(self.cfg["overlay_pos"]))
+        except Exception as e:
+            log("切换字幕条位置失败：" + repr(e))
+
+    def _sync_handle(self):
+        """让抓手胶囊跟着字幕条走：贴右上角外侧，穿透态常驻，交互态收起。"""
+        try:
+            if getattr(self, "hit", None) is None:
+                return
+            if not self.win.isVisible() or bool(getattr(self, "_interactive", False)):
+                self.hit.hide()
+                return
+            g = self.win.geometry()
+            scr = self._avail_rect()
+            # 先贴在字幕条右外侧；右边没位置（窗口已贴屏幕右缘）再退回内侧
+            x = g.right() + 4
+            if x + 82 > scr.right():
+                x = g.right() - 82
+            y = max(scr.top() + 2, g.top() + 6)
+            self.hit.move(x, y)
+            self.hit.show()
+            self.hit.raise_()
+        except Exception as e:
+            log("抓手同步失败：" + repr(e))
+
+    def _has_text(self):
+        """当前句有没有内容：有就展开成对话框高度，没有就收成状态栏。"""
+        try:
+            return bool((self.src_label.text() or "").strip()
+                        or (self.dst_label.toPlainText() or "").strip())
+        except Exception:
+            return True
+
     def _fit_height(self):
-        """字幕变长时把窗口撑高，不截断。"""
+        """把卡片量准；对话框模式下窗口高度恒定，不再随句子长短上下跳。"""
         try:
             inner = max(220, self.win.width() - self.MARGIN * 2 - 3 - 35)
             # QLabel 自动换行的 sizeHint / heightForWidth 都会高估且滞后，按字体自己量行高
@@ -5357,11 +5750,24 @@ class Overlay:
                         total += w.height()
                 if total:
                     total += self._hist_lay.spacing() * max(0, len(self._hist_widgets) - 1)
+                # 对话框高度是固定的：历史区最多占一半，剩下的留给当前句，免得把正文挤没
+                if str(self.cfg.get("overlay_style") or "dialog") == "dialog":
+                    total = min(total, int(self._dialog_h() * 0.52))
                 self.hist_box.setFixedHeight(max(0, total))
             self.panel.layout().invalidate()
             self.panel.layout().activate()
             h = self.panel.sizeHint().height() + self.MARGIN * 2
-            h = max(118, min(420, h))     # 最多 5 行，窗口高度不再放到 700 挡视野
+            # A 案（Galgame 对话框）：高度恒定、底边死锁。内容超长只在卡片内裁，
+            # 窗口尺寸和位置都不动，就不会出现“字幕条自己往上凸起”。
+            if str(self.cfg.get("overlay_style") or "dialog") == "dialog":
+                if self._has_text() or self.hist_box.isVisibleTo(self.win):
+                    h = self._dialog_h()
+                else:
+                    # 空闲态（静音 / 刚启动还没有句子）收成一条状态栏：195px 的空框
+                    # 等于白挡游戏画面，收窄后只留 92px，上沿不动所以不跳。
+                    h = 92
+            else:
+                h = max(118, min(420, h))
             if abs(self.win.height() - h) > 3:
                 old_bottom = self.win.y() + self.win.height()
                 self.win.layout().invalidate()
@@ -5393,21 +5799,7 @@ class Overlay:
         except Exception:
             pass
         self._schedule_full_repaint()
-        """窗口长高后如果会超出屏幕底边，就整体往上挪，别让最后一行跑到屏幕外。"""
-        try:
-            scr = self.win.screen().availableGeometry()
-            x, y = self.win.x(), self.win.y()
-            w, h = self.win.width(), self.win.height()
-            if x + w > scr.right():
-                x = max(scr.left(), scr.right() - w)
-            if y < scr.top():
-                y = scr.top()
-            if y + h > scr.bottom():
-                y = max(scr.top(), scr.bottom() - h)
-            if (x, y) != (self.win.x(), self.win.y()):
-                self.win.move(x, y)
-        except Exception:
-            pass
+        self._sync_handle()
 
     def _glass(self, value=None):
         """只有卡片底色带透明度；文字、按钮字、色条全都保持不透明，拖到多淡文字都清晰。"""
@@ -5424,7 +5816,7 @@ class Overlay:
         else:
             edge = "border:1px solid rgba(255,255,255,%d);border-left:3px solid #3B82F6;" % line
         self.panel.setStyleSheet(
-            "#panel{background:rgba(19,19,17,%d);%s"
+            "#panel{background:rgba(16,18,22,%d);%s"
             "border-radius:14px;}"
             "QLabel{background:transparent;}"
             "QPushButton{background:rgba(255,255,255,14);border:1px solid rgba(255,255,255,24);"
@@ -5771,6 +6163,31 @@ def build_settings(owner):
     lat_box.setToolTip("越短越跟手，但一句话可能被切在两段；连麦短句多用快速")
     row.addWidget(lat_box, 1)
     root.addLayout(row)
+    row = QHBoxLayout()
+    row.addWidget(QLabel("自定义热词"))
+    hot_box = QLineEdit(str(cfg.get("hotwords_custom") or ""))
+    hot_box.setPlaceholderText("常被听错的词，空格分隔，例如：萝莉 御姐 抽卡 老陈")
+    hot_box.setToolTip("只在「热词模式」不是关闭时生效，只在本机处理，不上传")
+    row.addWidget(hot_box, 1)
+    root.addLayout(row)
+    row = QHBoxLayout()
+    row.addWidget(QLabel("热词模式"))
+    hw_box = QComboBox()
+    hw_box.addItem("只用手填的词（推荐）", "custom")
+    hw_box.addItem("只用内置词表 + 手填", "full")
+    hw_box.addItem("关闭热词", "off")
+    cur_hw = str(cfg.get("asr_hotwords_mode") or "custom")
+    for i in range(hw_box.count()):
+        if hw_box.itemData(i) == cur_hw:
+            hw_box.setCurrentIndex(i)
+    hw_box.setToolTip("热词会当成提示词喂给模型：静音或听不清时，模型可能照着词表“念”出你没说的设定词。"
+                      "默认只用手填的词；出现“没说话却打出设定词”就切到关闭")
+    row.addWidget(hw_box, 1)
+    root.addLayout(row)
+    def _preview_hw():
+        cfg["asr_hotwords_mode"] = str(hw_box.currentData() or "custom")
+        save_config(cfg)
+    hw_box.currentIndexChanged.connect(lambda _i: _preview_hw())
     asr_hint = QLabel("想让识别更准：先选「准确优先」；口音重就把模型换成 medium 或 turbo（首次使用会自动下载约 1.5G，CPU 上更慢）。")
     asr_hint.setStyleSheet("color:#8C8781;font-size:11px;")
     asr_hint.setWordWrap(True)
@@ -5803,7 +6220,9 @@ def build_settings(owner):
     mm.addWidget(btn_dl)
     root.addLayout(mm)
 
-    tr_status = QLabel("离线翻译（Argos 中→英）：%s" % ("已安装" if argos_installed() else "首次使用会自动准备"))
+    tr_status = QLabel("离线翻译（Argos %s）：%s" % (
+        pair_label(CURRENT_LANGS.get("sl", "zh"), CURRENT_LANGS.get("tl", "en")),
+        "已安装" if argos_installed() else "首次使用会自动准备"))
     tr_status.setStyleSheet("color:#5E5A52;font-size:11px;")
     root.addWidget(tr_status)
 
@@ -5929,8 +6348,30 @@ def build_settings(owner):
         pos_box.setCurrentIndex(0)
     pos_box.setMinimumWidth(190)
     row3.addWidget(pos_box)
+    btn_reset_pos = QPushButton("复位到屏幕顶部")
+    btn_reset_pos.setObjectName("ghost")
+    btn_reset_pos.setCursor(Qt.PointingHandCursor)
+    btn_reset_pos.setToolTip("字幕条拖出屏幕、或换了显示器后一键找回")
+    row3.addWidget(btn_reset_pos)
     row3.addStretch(1)
     root.addLayout(row3)
+
+    def _reset_pos():
+        try:
+            owner.overlay.cfg["overlay_pos"] = "top"
+            owner.overlay.cfg.pop("window", None)
+            cfg["overlay_pos"] = "top"
+            cfg.pop("window", None)
+            owner.overlay.apply_position(save=True)
+            owner.overlay._fit_height()
+            try:
+                pos_box.setCurrentIndex(2)
+            except Exception:
+                pass
+            save_config(cfg)
+        except Exception as e:
+            log("复位字幕条位置失败：" + repr(e))
+    btn_reset_pos.clicked.connect(_reset_pos)
 
     def _preview_pos():
         try:
@@ -5939,6 +6380,54 @@ def build_settings(owner):
         except Exception:
             pass
     pos_box.currentIndexChanged.connect(lambda _i: _preview_pos())
+
+    row3b = QHBoxLayout()
+    row3b.addWidget(QLabel("字幕形态"))
+    sty_box = QComboBox()
+    sty_box.addItem("对话框（高度固定，推荐）", "dialog")
+    sty_box.addItem("字幕条（高度随内容伸缩）", "banner")
+    sty_box.setCurrentIndex(
+        1 if str(cfg.get("overlay_style") or "dialog") == "banner" else 0)
+    sty_box.setMinimumWidth(190)
+    row3b.addWidget(sty_box)
+    row3b.addStretch(1)
+    root.addLayout(row3b)
+
+    def _preview_style():
+        try:
+            owner.overlay.cfg["overlay_style"] = str(sty_box.currentData() or "dialog")
+            owner.overlay.apply_position()
+            owner.overlay._fit_height()
+        except Exception:
+            pass
+    sty_box.currentIndexChanged.connect(lambda _i: _preview_style())
+
+    row3c = QHBoxLayout()
+    row3c.addWidget(QLabel("顶部留白"))
+    gap_spin = QSpinBox()
+    gap_spin.setRange(0, 200)
+    gap_spin.setSingleStep(4)
+    gap_spin.setSuffix(" px")
+    try:
+        gap_spin.setValue(int(cfg.get("overlay_gap_top") or 8))
+    except Exception:
+        gap_spin.setValue(8)
+    gap_spin.setToolTip("顶部锚定时离屏幕上沿的距离；游戏顶部有血条 / 任务条时往下压 30–60px")
+    row3c.addWidget(gap_spin)
+    tail_hint = QLabel("只影响顶部锚定，拖动实时生效")
+    tail_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    row3c.addWidget(tail_hint)
+    row3c.addStretch(1)
+    root.addLayout(row3c)
+
+    def _preview_gap(v):
+        try:
+            cfg["overlay_gap_top"] = int(v)
+            owner.overlay.cfg["overlay_gap_top"] = int(v)
+            owner.overlay.apply_position(save=True)
+        except Exception:
+            pass
+    gap_spin.valueChanged.connect(lambda v: _preview_gap(int(v)))
     pos_hint = QLabel("默认底部居中、离任务栏 72px；交互模式下拖动字幕条，靠近中线 / 底部会自动吸附，松手记住。")
     pos_hint.setStyleSheet("color:#8C8781;font-size:11px;")
     pos_hint.setWordWrap(True)
@@ -6115,27 +6604,8 @@ def build_settings(owner):
     hk_edits = {}
     hk_tips = {}
     hk_default_tips = {}
-    for i, (key, label, tip) in enumerate((
-            ("hotkey_toggle", "切换交互模式", "Ctrl+Alt+G（避开 QQ 的 Ctrl+Alt+Z）"),
-            ("hotkey_fav_last", "收藏上一句", "Ctrl+Alt+D，纯键盘存档"),
-            ("hotkey_fav_easy", "收藏·简单", "Ctrl+Alt+1，收藏同时打上「简单」"),
-            ("hotkey_fav_mid", "收藏·中等", "Ctrl+Alt+2"),
-            ("hotkey_fav_hard", "收藏·困难", "Ctrl+Alt+3"),
-            ("hotkey_history", "侧边历史面板", "Ctrl+Alt+H，最近 10 句，全屏抓不住光标时的后备入口"),
-            ("hotkey_clear", "清空字幕流", "Ctrl+Alt+X"),
-            ("hotkey_subtitle", "开/关字幕显示", "Ctrl+Alt+V，屏幕想干净就一键收掉；识别和记录照跑"),
-            ("hotkey_capture", "开/关音频识别", "Ctrl+Alt+R，彻底停采集，省 CPU"),
-            ("hotkey_panic", "强制退出交互", "Ctrl+Alt+Q，逃生键：万一光标卡在字幕层，一按就还回去"),
-            ("hotkey_library", "唤起素材库", "Ctrl+Alt+L，直接抬出主窗口的 Library 页"),
-            ("hotkey_selftest", "切换自测模式", "Ctrl+Alt+T，学习时一键遮住译文"),
-            ("hotkey_f5_capture", "开始/暂停捕获", "Ctrl+Alt+P（原 F5 在游戏里常是快速存档，已避开）"),
-            ("hotkey_f6_fav", "收藏当前句", "Ctrl+Alt+U（原 F6）"),
-            ("hotkey_f7_sub", "显示/隐藏字幕", "Ctrl+Alt+B（原 F7）"),
-            ("hotkey_f8_drawer", "历史抽屉", "Ctrl+Alt+J（原 F8）"),
-            ("hotkey_f9_autoread", "自动朗读", "Ctrl+Alt+Y（原 F9；避开 QQ 截图的 Ctrl+Alt+A）"),
-            ("hotkey_f10_mute", "紧急静音", "Ctrl+Alt+M（原 F10），清队并暂停朗读"),
-            ("hotkey_ctrl_l", "素材库（旧 Ctrl+L 入口）", "留空不绑定；浏览器地址栏就是 Ctrl+L，不再抢"),
-            ("hotkey_ctrl_lab", "打开 Lab", "Ctrl+Alt+,（不再用 VS Code 的 Ctrl+,）"))):
+    # 键位清单统一来自模块级 HOTKEY_SPECS，和速查面板共用，避免两处不同步
+    for i, (key, label, tip, _grp) in enumerate(HOTKEY_SPECS):
         lb = QLabel(label)
         ed = QKeySequenceEdit()
         try:
@@ -6403,6 +6873,9 @@ def build_settings(owner):
         cfg["whisper_model"] = (model_box.currentData() or "auto")
         cfg["asr_quality"] = "accurate" if asr_box.currentIndex() == 0 else "fast"
         cfg["latency_mode"] = (lat_box.currentData() or "balanced")
+        # 自定义热词只做归一化（各种分隔符统一成空格），保留用户原写法
+        cfg["hotwords_custom"] = re.sub(r"[，,、;；\n]+", " ", hot_box.text()).strip()
+        cfg["asr_hotwords_mode"] = str(hw_box.currentData() or "custom")
         cfg["read_rate"] = int(rate.value())
         cfg["word_hl"] = bool(chk_hl.isChecked())
         cfg["auto_read"] = bool(chk_auto.isChecked())
@@ -6476,11 +6949,15 @@ def build_settings(owner):
         cfg["show_source"] = bool(chk_src.isChecked())
         cfg["overlay_bilingual"] = bool(chk_bilingual.isChecked())
         cfg["overlay_pos"] = str(pos_box.currentData() or "bottom")
+        cfg["overlay_style"] = str(sty_box.currentData() or "dialog")
         cfg["filter_short"] = bool(chk_short.isChecked())
         cfg["min_chars"] = int(min_chars.value())
         cfg["min_words"] = int(min_words.value())
         cfg["target_lang"] = state["tl"]
-        cfg["source_lang"] = "zh"
+        # 语种对双向配对：目标选中文就识别英文，其余情况识别中文（不再固定中文源）
+        cfg["source_lang"] = "en" if state["tl"] == "zh" else "zh"
+        if cfg["source_lang"] == cfg["target_lang"]:
+            cfg["source_lang"] = "en" if cfg["target_lang"] != "en" else "zh"
         cfg["mt_size"] = mt_box.currentData() or "small"
         cfg["rtl_overlay"] = bool(chk_rtl.isChecked())
         cfg["font_family"] = font_edit.text().strip()
@@ -7045,6 +7522,296 @@ def tcol(key, cfg=None, theme=None):
     return THEME_COLORS.get(name, THEME_COLORS["dark"]).get(key, "#9AA3B2")
 
 
+def pop_word_card(main, word, sentence="", spk=""):
+    """点词卡片：后台查义 → 就地显示 → 一键存进生词本（带上这句做语境）。"""
+    try:
+        from PySide6.QtCore import Qt as _Qt, QTimer
+        from PySide6.QtWidgets import (QFrame, QVBoxLayout, QHBoxLayout, QLabel,
+                                       QPushButton, QApplication)
+        from PySide6.QtGui import QCursor
+    except Exception:
+        return None
+    cfg = getattr(main, "cfg", {}) or {}
+    try:
+        old = getattr(main, "_word_card", None)
+        if old is not None:
+            old.deleteLater()
+    except Exception:
+        pass
+    card = QFrame(None, _Qt.Popup | _Qt.FramelessWindowHint)
+    card.setObjectName("wordCard")
+    card.setStyleSheet("QFrame#wordCard{background:%s;border:1px solid %s;border-radius:8px;}"
+                       % (tcol("card", cfg), tcol("border", cfg)))
+    lay = QVBoxLayout(card)
+    lay.setContentsMargins(14, 10, 14, 10)
+    lay.setSpacing(6)
+
+    head = QLabel(word)
+    head.setStyleSheet("font-size:16px;font-weight:600;color:%s;" % tcol("text", cfg))
+    # 已经存过的词，直接告诉用户，别让他重复点“存生词”
+    try:
+        hit = next((r for r in read_words()
+                    if str(r.get("w", "")).strip().lower() == word.lower()), None)
+    except Exception:
+        hit = None
+    if hit is not None:
+        nctx = len(hit.get("ctx") or []) or 1
+        head.setText("%s   已在生词本 · %d 条语境" % (word, nctx))
+    mean = QLabel("查询中…")
+    mean.setWordWrap(True)
+    mean.setMinimumWidth(200)
+    mean.setMaximumWidth(340)
+    mean.setStyleSheet("font-size:13px;color:%s;" % tcol("muted", cfg))
+    state = {"meaning": ""}
+
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    btn_save = QPushButton("＋ 存生词")
+    btn_save.setObjectName("primary")
+    btn_save.setFixedHeight(26)
+    btn_save.setEnabled(False)
+    if hit is not None:
+        btn_save.setText("已在生词本")
+    btn_close = QPushButton("关闭")
+    btn_close.setFixedHeight(26)
+    row.addWidget(btn_save)
+    row.addWidget(btn_close)
+    row.addStretch(1)
+
+    lay.addWidget(head)
+    lay.addWidget(mean)
+    lay.addLayout(row)
+
+    def save():
+        m = state["meaning"]
+        if not m:
+            return
+        ok = append_word(word, m, sentence, spk, scene=str(cfg.get("scene") or ""))
+        btn_save.setText("已存 ✓" if ok else "这句已经存过")
+        btn_save.setEnabled(False)
+        try:
+            main.refresh_words()
+            main.set_status("已存生词：%s" % word, "ok")
+        except Exception:
+            pass
+        QTimer.singleShot(900, card.close)
+
+    btn_save.clicked.connect(save)
+    btn_close.clicked.connect(card.close)
+
+    def fill(meaning):
+        try:
+            state["meaning"] = meaning or ""
+            mean.setText(meaning or "（没查到释义，可以到 Lab 换在线引擎）")
+            btn_save.setEnabled(bool(state["meaning"]))
+            card.adjustSize()
+        except Exception:
+            pass
+
+    def work():
+        try:
+            m = main.book.lookup(word, sentence)
+        except Exception as e:
+            log("点词查义失败：" + repr(e))
+            m = ""
+        QTimer.singleShot(0, lambda: fill(m))
+
+    threading.Thread(target=work, daemon=True).start()
+
+    card.adjustSize()
+    pos = QCursor.pos()
+    try:
+        scr = QApplication.primaryScreen()
+        g = scr.availableGeometry() if scr is not None else None
+    except Exception:
+        g = None
+    if g is not None:
+        x = min(max(g.left() + 8, pos.x() - 24), g.right() - card.width() - 8)
+        y = min(max(g.top() + 8, pos.y() + 18), g.bottom() - card.height() - 8)
+        card.move(x, y)
+    else:
+        card.move(pos.x() - 24, pos.y() + 18)
+    card.show()
+    try:
+        main._word_card = card
+    except Exception:
+        pass
+    return card
+
+
+def pop_hotkey_sheet(owner):
+    """快捷键速查面板：打开就能看全所有键位，底部直接跳去改。"""
+    from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+                                   QPushButton, QScrollArea, QWidget, QFrame)
+    from PySide6.QtCore import Qt
+
+    cfg = getattr(owner, "cfg", {}) or {}
+    theme = str(cfg.get("theme") or "dark")
+    base = THEME_COLORS.get(theme, THEME_COLORS["dark"])
+    old = getattr(owner, "_hk_sheet", None)
+    if old is not None:
+        try:
+            old.close()
+            old.deleteLater()
+        except Exception:
+            pass
+
+    dlg = QDialog(None)
+    dlg.setWindowTitle("快捷键速查")
+    dlg.resize(540, 620)
+    dlg.setStyleSheet(theme_qss(theme) + "QDialog{background:%s;}" % base["bg"])
+    root = QVBoxLayout(dlg)
+    root.setContentsMargins(18, 14, 18, 12)
+    root.setSpacing(8)
+
+    title = QLabel("快捷键")
+    title.setStyleSheet("font-size:17px;font-weight:600;color:%s;" % tcol("text", cfg))
+    root.addWidget(title)
+    sub = QLabel("游戏全屏时也能直接按，不用切回窗口。要改键位点底部「修改键位」。")
+    sub.setStyleSheet("color:%s;font-size:11px;" % tcol("muted", cfg))
+    sub.setWordWrap(True)
+    root.addWidget(sub)
+
+    find = QLineEdit()
+    find.setPlaceholderText("搜动作名或按键，例如：收藏 / Ctrl+Alt+U")
+    find.setFixedHeight(28)
+    root.addWidget(find)
+
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.NoFrame)
+    body = QWidget()
+    body.setStyleSheet("background:transparent;")
+    bl = QVBoxLayout(body)
+    bl.setContentsMargins(0, 0, 6, 0)
+    bl.setSpacing(2)
+    area.setWidget(body)
+    root.addWidget(area, 1)
+
+    rows = []            # (检索文本, 行控件, 所属分组容器)
+    group_blocks = []
+
+    for grp in HOTKEY_GROUP_ORDER:
+        specs = [s for s in HOTKEY_SPECS if s[3] == grp]
+        if not specs:
+            continue
+        box = QWidget()
+        box.setStyleSheet("background:transparent;")
+        vl = QVBoxLayout(box)
+        vl.setContentsMargins(0, 8, 0, 6)
+        vl.setSpacing(4)
+        gh = QLabel(grp)
+        gh.setStyleSheet("color:%s;font-size:12px;letter-spacing:1px;" % tcol("muted", cfg))
+        vl.addWidget(gh)
+        hint = HOTKEY_GROUP_HINT.get(grp)
+        if hint:
+            h = QLabel(hint)
+            h.setStyleSheet("color:%s;font-size:10px;" % tcol("muted", cfg))
+            vl.addWidget(h)
+        for key, label, tip, _g in specs:
+            r = QFrame()
+            r.setStyleSheet("QFrame{background:%s;border-radius:8px;}" % base.get("card", base["bg"]))
+            rl = QHBoxLayout(r)
+            rl.setContentsMargins(10, 7, 10, 7)
+            rl.setSpacing(10)
+            nv = QVBoxLayout()
+            nv.setSpacing(1)
+            name = QLabel(label)
+            name.setStyleSheet("font-size:13px;color:%s;background:transparent;" % tcol("text", cfg))
+            desc = QLabel(tip)
+            desc.setStyleSheet("color:%s;font-size:10px;background:transparent;" % tcol("muted", cfg))
+            desc.setWordWrap(True)
+            nv.addWidget(name)
+            nv.addWidget(desc)
+            rl.addLayout(nv, 1)
+            bind = str(cfg.get(key) or "").strip()
+            cap = QLabel(bind or "未绑定")
+            cap.setAlignment(Qt.AlignCenter)
+            cap.setFixedHeight(24)
+            cap.setMinimumWidth(96)
+            if bind:
+                cap.setStyleSheet("background:%s;color:%s;border-radius:6px;padding:2px 8px;"
+                                  "font-family:Consolas,monospace;font-size:12px;"
+                                  % (base.get("chip_bg", base["card"]), tcol("text", cfg)))
+            else:
+                cap.setStyleSheet("color:%s;font-size:11px;background:transparent;" % tcol("muted", cfg))
+            rl.addWidget(cap)
+            vl.addWidget(r)
+            rows.append((("%s %s %s %s" % (label, tip, bind, grp)).lower(), r, box))
+        group_blocks.append((box, vl))
+        bl.addWidget(box)
+    bl.addStretch(1)
+
+    def do_filter(text):
+        q = str(text or "").strip().lower()
+        # 用命中标记决定分组显隐：不能读 row.isVisible()，父容器一隐藏它永远是 False
+        hit = {}
+        for hay, row, box in rows:
+            vis = (not q) or (q in hay)
+            row.setVisible(vis)
+            if vis:
+                hit[id(box)] = True
+        for box, _vl in group_blocks:
+            box.setVisible(bool(hit.get(id(box))) or not q)
+
+    find.textChanged.connect(do_filter)
+
+    btns = QHBoxLayout()
+    btns.setSpacing(8)
+    b_edit = QPushButton("修改键位")
+    b_edit.setObjectName("primary")
+    b_edit.setFixedHeight(30)
+    b_reset = QPushButton("恢复推荐键位")
+    b_reset.setFixedHeight(30)
+    b_close = QPushButton("关闭")
+    b_close.setFixedHeight(30)
+    btns.addWidget(b_edit)
+    btns.addWidget(b_reset)
+    btns.addStretch(1)
+    btns.addWidget(b_close)
+    root.addLayout(btns)
+
+    def go_edit():
+        dlg.close()
+        try:
+            owner.open_settings()
+        except Exception as e:
+            log("打开设置面板失败：" + repr(e))
+
+    def do_reset():
+        for key, _label, _tip, _g in HOTKEY_SPECS:
+            if key in DEFAULT_CONFIG:
+                cfg[key] = DEFAULT_CONFIG[key]
+        cfg["hotkey_custom"] = False
+        save_config(cfg)
+        for tgt in (owner, getattr(owner, "app", None), getattr(owner, "main", None)):
+            fn = getattr(tgt, "reload_hotkeys", None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception as e:
+                    log("重新注册热键失败：" + repr(e))
+                break
+        try:
+            owner.set_status("已恢复推荐键位", "ok")
+        except Exception:
+            pass
+        dlg.close()
+        pop_hotkey_sheet(owner)
+
+    b_edit.clicked.connect(go_edit)
+    b_reset.clicked.connect(do_reset)
+    b_close.clicked.connect(dlg.close)
+
+    try:
+        owner._hk_sheet = dlg
+    except Exception:
+        pass
+    dlg.show()
+    find.setFocus()
+    return dlg
+
+
 def theme_qss(theme):
     c = THEME_COLORS.get(theme, THEME_COLORS["dark"])
     s = theme_style(theme)
@@ -7229,7 +7996,7 @@ class MainWindow:
         self._fav_keys = set()
 
         self.win = QWidget()
-        self.win.setWindowTitle("沉浸字幕")
+        self.win.setWindowTitle("Oversub 沉浸字幕")
         self.win.resize(940, 660)
         # 最小尺寸兜底：某些启动路径下布局尚未参与计算，窗口会被压成 160×28 标题条
         self.win.setMinimumSize(900, 600)
@@ -7278,6 +8045,7 @@ class MainWindow:
         self.nav_buttons = []
         for glyph, full, prefix in (("捕", "Capture 捕获台", "Capture"),
                                     ("库", "Library 语言库", "Library"),
+                                    ("说", "SceneTalk 情景译", "Talk"),
                                     ("验", "Lab 实验室", "Lab")):
             b = _NavBtn(glyph, full, nav)
             b.setCheckable(True)
@@ -7299,13 +8067,23 @@ class MainWindow:
         head = QHBoxLayout()
         titles = QVBoxLayout()
         titles.setSpacing(2)
-        t = QLabel("沉浸字幕")
+        # 品牌露出：英文名独立成标题，中文名做副标，一眼能对上是哪个产品
+        brand = QHBoxLayout()
+        brand.setSpacing(8)
+        t = QLabel("Oversub")
         t.setObjectName("title")
-        t.setToolTip("抓系统播放的声音，实时把中文变成屏幕上的英文字幕")
+        t.setToolTip("Oversub｜沉浸字幕：抓系统播放的声音，实时把听到的话变成屏幕上的对照字幕")
+        b2 = QLabel("沉浸字幕")
+        b2.setObjectName("desc")
+        b2.setAlignment(Qt.AlignBottom)
+        b2.setContentsMargins(0, 0, 0, 3)
+        brand.addWidget(t)
+        brand.addWidget(b2)
+        brand.addStretch(1)
+        titles.addLayout(brand)
         d = QLabel("")
         d.setObjectName("desc")
         d.hide()
-        titles.addWidget(t)
         head.addLayout(titles, 1)
         # 状态就贴在标题右边，不再单独占一整张状态卡
         self.head_state = QHBoxLayout()
@@ -7383,6 +8161,13 @@ class MainWindow:
             self.head_theme.setCurrentIndex(0)
         self.head_theme.currentIndexChanged.connect(self._on_head_theme)
         head.addWidget(self.head_theme)
+        # 快捷键以前埋在设置长表里，入口提到顶栏：看一眼就知道有哪些、在哪改
+        self.btn_hk = QPushButton("快捷键")
+        self.btn_hk.setCursor(Qt.PointingHandCursor)
+        self.btn_hk.setFixedHeight(30)
+        self.btn_hk.setToolTip("查看全部 %d 个快捷键，可搜索，也能直接改键位" % len(HOTKEY_SPECS))
+        self.btn_hk.clicked.connect(self.show_hotkeys)
+        head.addWidget(self.btn_hk)
         root.addLayout(head)
         self.btn_pin.toggled.connect(self.toggle_pin)
         self.btn_help.clicked.connect(self.show_help)
@@ -7441,14 +8226,84 @@ class MainWindow:
             meta.addWidget(b)
         cv.addLayout(meta)
 
+        # 译文行改成可点词：单击某个词直接查义并存生词，双击仍走整句拆词
+        from PySide6.QtWidgets import QTextBrowser
+
+        class _WordText(QTextBrowser):
+            def __init__(self, init_text="", parent=None):
+                super().__init__(parent)
+                self._raw = str(init_text or "")
+                self._color = ""
+                self.on_word = None
+                self.setOpenLinks(False)
+                self.setFrameShape(QFrame.NoFrame)
+                self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                self.setStyleSheet("background:transparent;border:none;")
+                self.anchorClicked.connect(self._hit)
+                self.document().documentLayout().documentSizeChanged.connect(self._fit)
+                super().setText(self._markup(self._raw))
+
+            def _hit(self, url):
+                w = url.toString().strip()
+                if w and callable(self.on_word):
+                    self.on_word(w)
+
+            def set_text(self, s, color=""):
+                self._raw = str(s or "")
+                if color:
+                    self._color = color
+                super().setText(self._markup(self._raw))
+                self._fit()
+
+            def setText(self, s):          # 兼容原 QLabel 的调用方式
+                self.set_text(s)
+
+            def text(self):                # 外部仍按原句读取
+                return self._raw
+
+            def _markup(self, s):
+                import html as _html
+                import re as _re
+                c = self._color or "inherit"
+                parts, pos = [], 0
+                for m in _re.finditer(r"[A-Za-z][A-Za-z'’-]*", s):
+                    parts.append(_html.escape(s[pos:m.start()]).replace(" ", "&nbsp;"))
+                    w = m.group(0)
+                    parts.append('<a href="%s" style="color:%s;text-decoration:none">%s</a>'
+                                 % (_html.escape(w, quote=True), c, _html.escape(w)))
+                    pos = m.end()
+                parts.append(_html.escape(s[pos:]).replace(" ", "&nbsp;"))
+                return '<span style="white-space:pre-wrap">%s</span>' % "".join(parts)
+
+            def _fit(self, *a):
+                try:
+                    w = self.viewport().width()
+                    if w <= 0:
+                        return
+                    self.document().setTextWidth(w)
+                    h = max(28, int(self.document().size().height()) + 8)
+                    if abs(self.height() - h) > 2:
+                        self.setFixedHeight(h)
+                except Exception:
+                    pass
+
+            def resizeEvent(self, ev):
+                super().resizeEvent(ev)
+                self._fit()
+
         self.cap_zh = QLabel("等待音频")
         self.cap_zh.setObjectName("captionZh")
         self.cap_zh.setWordWrap(True)
         self.cap_zh.setToolTip("双击：查这个意思下收集过的所有目标语言说法")
-        self.cap_en = QLabel("选择音频源与语种，点「开始捕获」")
+        self.cap_en = _WordText("选择音频源与语种，点「开始捕获」")
         self.cap_en.setObjectName("captionEn")
-        self.cap_en.setWordWrap(True)
-        self.cap_en.setToolTip("双击：拆词查义")
+        self.cap_en.setStyleSheet("background:transparent;border:none;color:%s;"
+                                  % tcol("text", owner.cfg))
+        self.cap_en.setToolTip("单击单词：查义并存生词 ｜ 双击：拆整句")
+        self.cap_en.on_word = lambda w: getattr(
+            self, "_on_word_clicked", lambda _x: None)(w)
+        self.cap_en._color = tcol("text", owner.cfg)
         cv.addWidget(self.cap_zh)
         cv.addWidget(self.cap_en)
         # 旧的「收藏这句」保留对象供状态刷新使用，但不再占界面
@@ -7497,6 +8352,12 @@ class MainWindow:
         self.lbl_audio_dev = QLabel("音频源：系统默认")
         self.lbl_audio_dev.hide()
         ctl.addStretch(1)
+        # 常驻状态徽章：引擎 / 音频设备 / 信号一眼可见，不用去 tooltip 里翻
+        self.badge = QLabel("○ 未开始")
+        self.badge.setCursor(Qt.PointingHandCursor)
+        self.badge.setToolTip("点一下打开 Lab 调整")
+        self.badge.mousePressEvent = lambda _e: owner.open_settings()
+        ctl.addWidget(self.badge)
         arrow = QLabel("中文 →")
         arrow.setStyleSheet("color:%s;font-size:12px;" % tcol("muted", self.cfg))
         ctl.addWidget(arrow)
@@ -8390,6 +9251,20 @@ class MainWindow:
             v.addStretch(1)
         self.tabs.addTab(lab_tab, "Lab｜实验室")
 
+        # ---------------- SceneTalk 情景译：并入主程序，不再是独立网页工具 ----------------
+        # 说的是“我想说的这句英文怎么说”，和 Capture（听）共用一份语料库与设置；
+        # 页面用本机回环服务提供（浏览器的 localStorage / 安全上下文都依赖 http 源）。
+        self.talk_tab = QWidget()
+        tk = QVBoxLayout(self.talk_tab)
+        tk.setContentsMargins(0, 6, 0, 0)
+        tk.setSpacing(8)
+        self.talk_ph = QLabel("点左侧「说」进入情景译；第一次打开需要两秒左右。")
+        self.talk_ph.setObjectName("desc")
+        self.talk_ph.setAlignment(Qt.AlignCenter)
+        tk.addWidget(self.talk_ph, 1)
+        self._talk_view = None
+        self.tabs.addTab(self.talk_tab, "SceneTalk｜情景译")
+
         # ---- 顶层只留三个模块：隐藏原生的 7 个页签，改由侧栏 + 次级导航条切换 ----
         try:
             self.tabs.tabBar().hide()
@@ -8481,7 +9356,7 @@ class MainWindow:
 
         # 底部：悬浮字幕开关已随捕获控制行走；这里只留低频入口，全部隐藏
         foot = QHBoxLayout()
-        self.btn_pause = QPushButton("暂停")
+        self.btn_pause = QPushButton("开始")
         self.btn_pause.setObjectName("primary")
         self.btn_pause.setCursor(Qt.PointingHandCursor)
         self.btn_pause.setFixedHeight(36)
@@ -8540,13 +9415,14 @@ class MainWindow:
         self.tray = None
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = QSystemTrayIcon(self.icon, self.win)
-            self.tray.setToolTip("沉浸字幕")
+            self.tray.setToolTip("Oversub 沉浸字幕")
             menu = QMenu()
             act_show = QAction("显示主窗口", menu)
             act_overlay = QAction("显示/隐藏悬浮条", menu)
             act_pause = QAction("暂停/继续", menu)
+            act_reset = QAction("重置字幕条位置", menu)
             act_quit = QAction("退出", menu)
-            for a in (act_show, act_overlay, act_pause):
+            for a in (act_show, act_overlay, act_pause, act_reset):
                 menu.addAction(a)
             menu.addSeparator()
             menu.addAction(act_quit)
@@ -8554,11 +9430,18 @@ class MainWindow:
             act_show.triggered.connect(self.show)
             act_overlay.triggered.connect(self.on_overlay_toggle_click)
             act_pause.triggered.connect(self.on_pause)
+            act_reset.triggered.connect(self._reset_overlay_pos)
             act_quit.triggered.connect(owner.quit)
             self.tray.activated.connect(self._tray_activated)
             self.tray.show()
 
         self.win.closeEvent = self._close_event
+
+        # 启动时按预设摆正一次：上次把字幕条拖出屏幕（配置里 y 超屏）也能自动拉回来
+        try:
+            owner.overlay.apply_position()
+        except Exception as e:
+            log("启动摆放字幕条失败：" + repr(e))
 
         # 拉记录
         self.timer = QTimer()
@@ -8599,6 +9482,8 @@ class MainWindow:
         try:
             idx = int(self.cfg.get("last_tab") or 0)
             if 0 <= idx < self.tabs.count():
+                if idx == 7:
+                    self._ensure_talk_view()       # 上次停在情景译：恢复时把页面一起载入
                 self.tabs.setCurrentIndex(idx)      # 恢复上次停留的页面
         except Exception:
             pass
@@ -8617,8 +9502,10 @@ class MainWindow:
         m_sl, m_tl = lang_meta(sl), lang_meta(tl)
         it2 = self.table.horizontalHeaderItem(2)
         if it2 is not None:
-            it2.setText("识别原文（%s）" % m_sl.get("name", sl))
-            it2.setToolTip("ASR 识别出的源文本：%s" % m_sl.get("native", ""))
+            # 中英混说时每句语种可能不同，表头不再写死某一种语言
+            it2.setText("识别源文本")
+            it2.setToolTip("ASR 识别出的原文；中英混说时每句语种可能不同，"
+                           "悬停单元格可看这一句的语种")
         it3 = self.table.horizontalHeaderItem(3)
         if it3 is not None:
             it3.setText("目标译文")
@@ -8631,9 +9518,10 @@ class MainWindow:
         self.lang_box.blockSignals(True)
         self.lang_box.clear()
         for code, meta in LANG_REGISTRY.items():
-            self.lang_box.addItem("%s %s%s" % (
-                meta.get("name"), meta.get("native"),
-                "" if meta.get("installed") else "（未安装）"), code)
+            nm, nat = meta.get("name"), meta.get("native")
+            label = nm if nm == nat else "%s %s" % (nm, nat)
+            self.lang_box.addItem("%s%s" % (
+                label, "" if meta.get("installed") else "（未安装）"), code)
         cur = str(self.cfg.get("target_lang") or "en")
         for i in range(self.lang_box.count()):
             if self.lang_box.itemData(i) == cur:
@@ -8666,6 +9554,11 @@ class MainWindow:
             profiles[old] = self._profile_of_current()
         self.cfg["lang_profiles"] = profiles
         self.cfg["target_lang"] = code
+        # 双向配对：目标选中文 → 英文识别 + 翻成中文；目标选其他语种 → 中文识别 + 翻成该语种
+        want_sl = "en" if code == "zh" else "zh"
+        if want_sl == code:
+            want_sl = "en" if code != "en" else "zh"
+        self.cfg["source_lang"] = want_sl
         prof = dict(profiles.get(code) or {})
         for key in ("font_size", "opacity", "whisper_model", "min_chars", "min_words",
                     "show_source", "overlay_bilingual"):
@@ -8673,6 +9566,17 @@ class MainWindow:
                 self.cfg[key] = prof[key]
         set_langs(self.cfg)
         save_config(self.cfg)
+        # ASR 语言与翻译模型都是引擎启动时加载的：引擎在跑就重启一次，否则下次开始捕获自动生效
+        try:
+            was_capturing = bool(getattr(getattr(self.owner, "capture", None), "running", False))
+            if getattr(self.owner, "pipeline", None) is not None:
+                self.owner.restart_engine()
+                if was_capturing:
+                    self.owner.start_capture()      # 采集本来在跑，切语种后自动接回来
+                log("语种对已切到 %s，引擎已重启" % pair_label(
+                    self.cfg["source_lang"], self.cfg["target_lang"]))
+        except Exception as e:
+            log("切语种后重启引擎失败：" + repr(e))
         try:
             for key in ("target_lang", "source_lang", "font_size", "opacity", "font_family",
                         "lang_fonts", "rtl_overlay"):
@@ -8843,13 +9747,19 @@ class MainWindow:
         if alts:
             en_show += "（+%d 备选）" % len(alts)
         zh_show = str(zh) if int(count or 1) <= 1 else "%s  ×%d" % (zh, int(count))
-        vals = (ts, shown_spk, zh_show, en_show, scene_name, qual_mark,
-                "★" if fav_on else "☆", "▶")
+        # 记录要能看出先后：每行一个自增号，最新的号最大，直接写进时间列
+        try:
+            self._row_seq = int(getattr(self, "_row_seq", 0)) + 1
+        except Exception:
+            self._row_seq = 1
+        vals = ("#%d  %s" % (self._row_seq, ts), shown_spk, zh_show, en_show,
+                scene_name, qual_mark, "★" if fav_on else "☆", "▶")
         for i, v in enumerate(vals):
             it = QTableWidgetItem(str(v))
             it.setToolTip(str(v))
             if i == 0:
-                it.setForeground(Qt.gray)
+                # 最新一条：序号用强调色，一眼看出这条是刚发生的
+                it.setForeground(QColor(tcol("accent", self.cfg)))
             if i == 1 and spk:
                 it.setForeground(QColor(spk_color(spk, SPK_TEXT_COLORS)))
                 it.setBackground(QColor(spk_tint(spk)))
@@ -8884,9 +9794,9 @@ class MainWindow:
 
     def add_row(self, ts, zh, en, spk=""):
         self.cap_zh.setText(zh)
-        self.cap_en.setText(en)
-        self.cap_en.setStyleSheet(
-            "color:%s;" % spk_color(spk, SPK_TEXT_COLORS) if spk else "")
+        # 逐个词可点：说话人配色同步给词链接，没有说话人就用主文本色
+        self.cap_en.set_text(
+            en, spk_color(spk, SPK_TEXT_COLORS) if spk else tcol("text", self.cfg))
         if hasattr(self, "live_src"):
             self.live_src.setText("源：%s" % zh)
             self.live_tgt.setText("译：%s" % en)
@@ -8946,7 +9856,14 @@ class MainWindow:
         try:
             if idx is None:
                 idx = self.tabs.currentIndex()
-            group = "Capture" if idx == 0 else ("Lab" if idx == 6 else "Library")
+            if idx == 0:
+                group = "Capture"
+            elif idx == 6:
+                group = "Lab"
+            elif idx == 7:
+                group = "Talk"
+            else:
+                group = "Library"
             for b in self.nav_buttons:
                 b.setChecked(b.property("grp") == group)
             # Library 的 5 个子页才显示次级导航
@@ -8960,12 +9877,40 @@ class MainWindow:
         except Exception as e:
             log("切页状态同步失败：" + repr(e))
 
+    def _ensure_talk_view(self):
+        """懒加载情景译：第一次点「说」才创建 Web 视图，冷启动不受影响。"""
+        if getattr(self, "_talk_view", None) is not None:
+            return self._talk_view
+        try:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtWebEngineWidgets import QWebEngineView
+            port = scenetalk_port()
+            view = QWebEngineView(self.talk_tab)
+            lay = self.talk_tab.layout()
+            if lay is not None:
+                lay.replaceWidget(self.talk_ph, view)
+            self.talk_ph.hide()
+            view.setUrl(QUrl("http://127.0.0.1:%d/SceneTalk.html" % port))
+            self._talk_view = view
+            log("情景译已嵌入主程序：127.0.0.1:%d" % port)
+        except Exception as e:
+            log("情景译载入失败：" + repr(e))
+            try:
+                self.talk_ph.setText("情景译载入失败：%s" % e)
+            except Exception:
+                pass
+        return getattr(self, "_talk_view", None)
+
     def _nav_go(self, prefix):
-        """侧栏三个入口：Capture / Library / Lab。Library 落到上次停留的子页。"""
+        """侧栏四个入口：Capture / Library / Talk / Lab。Library 落到上次停留的子页。"""
         if prefix == "Capture":
             self._goto_tab(0)
         elif prefix == "Lab":
             self._goto_tab(6)
+        elif prefix == "Talk":
+            # 情景译是内嵌网页：第一次进来才启动 Chromium，不拖慢冷启动
+            self._ensure_talk_view()
+            self._goto_tab(7)
         else:
             last = int(self.cfg.get("last_lib_tab") or 1)
             self._goto_tab(last if 1 <= last <= 5 else 1)
@@ -8980,9 +9925,25 @@ class MainWindow:
         self.set_status("会话已重命名：%s" % (txt or "未命名"), "ok")
 
     def _sync_capture_ui(self):
+        # 三态：未开始 / 收听中 / 已暂停。之前把“未开始”也画成“暂停捕获”，
+        # 第一次点反而进暂停，得点两次才真正开始。
+        running = bool(getattr(self.owner, "capture", None)
+                       and getattr(self.owner.capture, "running", False))
         paused = bool(getattr(self.owner, "paused", False))
-        self.btn_capture.setText("继续捕获" if paused else "暂停捕获")
-        self.live_state.setText("已暂停" if paused else "就绪")
+        if not running and not paused:
+            self.btn_capture.setText("开始捕获")
+            state, tone = "未开始", ""
+        elif paused:
+            self.btn_capture.setText("继续捕获")
+            state, tone = "已暂停", "warn"
+        else:
+            self.btn_capture.setText("暂停捕获")
+            state, tone = "收听中", "ok"
+        try:
+            self.owner.main._badge_set(state, tone)
+        except Exception:
+            pass
+        self.live_state.setText(state)
         self.lbl_src_lang.setText("源语种：%s" % lang_name(self.cfg.get("source_lang") or "zh"))
         self.lbl_tgt_lang.setText("目标语种：%s" % lang_name(self.cfg.get("target_lang") or "en"))
         dev = str(self.cfg.get("loopback_device") or "系统默认")
@@ -9054,7 +10015,13 @@ class MainWindow:
 
     def _on_capture_btn(self):
         try:
-            self.owner.toggle_pause()
+            running = bool(getattr(self.owner, "capture", None)
+                           and getattr(self.owner.capture, "running", False))
+            if not running and not getattr(self.owner, "paused", False):
+                # 未开始 → 第一次点击就是开始，而不是被当成“暂停”
+                self.owner.start_capture()
+            else:
+                self.owner.toggle_pause()
         except Exception as e:
             log("切换捕获失败：" + repr(e))
         self._sync_capture_ui()
@@ -9896,6 +10863,11 @@ class MainWindow:
             return
         self.cfg["theme"] = theme
         self.win.setStyleSheet(theme_qss(theme))
+        # 译文行的词链接是内联颜色，换主题要跟着重刷，否则还是上一套配色
+        try:
+            self.cap_en.set_text(self.cap_en.text(), tcol("text", self.cfg))
+        except Exception:
+            pass
         save_config(self.cfg)
         for k, act in getattr(self, "_theme_actions", {}).items():
             act.setChecked(k == theme)
@@ -10185,6 +11157,24 @@ class MainWindow:
             return
         build_word_dialog(self.win, self.book, sentence, spk, words, self.refresh_words,
                           conf=conf, scene=self.cfg.get("scene") or "")
+
+    def _on_word_clicked(self, word):
+        """单击译文里的某个词：取词 → 后台查义 → 弹词卡，可一键存生词。"""
+        import re as _re
+        w = _re.sub(r"[^A-Za-z'’-]", "", str(word or "")).strip("'-’")
+        if len(w) < 2:
+            return
+        sentence, spk = "", ""
+        try:
+            sentence = self.cap_en.text().strip()
+            d = self._row_data(0) or {}
+            spk = d.get("spk", "") or ""
+        except Exception:
+            pass
+        try:
+            pop_word_card(self, w, sentence, spk)
+        except Exception as e:
+            log("点词卡片失败：" + repr(e))
 
     def _on_lang_filter(self, on):
         self.cfg["filter_by_lang"] = bool(on)
@@ -10895,6 +11885,30 @@ class MainWindow:
         except Exception as e:
             log("隔离生词语境失败：" + repr(e))
 
+    def show_hotkeys(self):
+        """顶栏入口：弹出快捷键速查面板（可搜索、可直接跳去改键位）。"""
+        try:
+            pop_hotkey_sheet(self)
+        except Exception as e:
+            log("快捷键面板打开失败：" + repr(e))
+
+    def _hk_first_hint(self):
+        """首次启动：把「快捷键」入口点亮 8 秒 + 状态行一句话，不弹窗、不重复。"""
+        from PySide6.QtCore import QTimer
+        try:
+            self.btn_hk.setStyleSheet(
+                "QPushButton{background:%s;color:#FFFFFF;border:none;border-radius:8px;"
+                "padding:4px 14px;font-size:13px;}" % tcol("accent", self.cfg))
+            QTimer.singleShot(8000, lambda: self.btn_hk.setStyleSheet(""))
+        except Exception:
+            pass
+        try:
+            self.set_status("快捷键 %d 个：点顶栏「快捷键」查看或修改 ｜ %s 进字幕交互"
+                            % (len(HOTKEY_SPECS),
+                               self.cfg.get("hotkey_toggle") or "Ctrl+Alt+G"), "ok")
+        except Exception:
+            pass
+
     def edit_alts(self, row):
         """给一条记录挂备选英文：一条中文可以有多条英文，表格里只显示折叠计数。"""
         from PySide6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QLineEdit,
@@ -11091,6 +12105,31 @@ class MainWindow:
         rewrite_fav(keep)
         self.refresh_fav()
 
+    def _badge_text(self):
+        """徽章里除了状态，还要写清是哪个引擎、哪路音频，才好判断问题出在哪。"""
+        eng = ("在线模型" if (str(self.cfg.get("engine") or "") == "online"
+                             and self.cfg.get("api_key")) else "本地 Argos")
+        dev = str(self.cfg.get("loopback_device") or "系统默认音频")
+        if len(dev) > 14:
+            dev = dev[:12] + "…"
+        return "%s ｜ %s" % (eng, dev)
+
+    def _badge_set(self, state, tone=""):
+        if not hasattr(self, "badge"):
+            return
+        c = THEME_COLORS.get(str(self.cfg.get("theme") or "dark"), THEME_COLORS["dark"])
+        color = {"ok": c["ok"], "listening": c["ok"], "loading": c["warn"],
+                 "warn": c["warn"], "error": c["err"]}.get(tone, c["muted"])
+        mark = {"ok": "●", "listening": "●", "warn": "▲", "error": "■",
+                "loading": "◐"}.get(tone, "○")
+        self.badge.setText("%s %s ｜ %s" % (mark, state, self._badge_text()))
+        self.badge.setStyleSheet(
+            "color:%s;font-size:11px;background:rgba(127,127,127,20);"
+            "border-radius:8px;padding:3px 9px;" % color)
+        self.badge.setToolTip("状态：%s\n引擎：%s\n音频源：%s\n左键打开 Lab"
+                              % (state, self._badge_text(),
+                                 self.cfg.get("loopback_device") or "系统默认音频"))
+
     def set_status(self, text, tone=""):
         c = THEME_COLORS.get(str(self.cfg.get("theme") or "dark"), THEME_COLORS["dark"])
         color = {"ok": c["ok"], "listening": c["ok"], "info": c["accent"],
@@ -11098,12 +12137,31 @@ class MainWindow:
                      tone, c["muted"])
         self.dot.setStyleSheet("color:%s;font-size:11px;" % color)
         self.status.setText(text)
+        self._badge_set(text, tone)
         fade_in(self.status, 120)
 
     # ---------------- 交互 ----------------
+    def _reset_overlay_pos(self):
+        """字幕条跑出屏幕 / 换过显示器后找回：清位置记忆，回到屏幕顶部。"""
+        try:
+            ov = self.owner.overlay
+            ov.cfg["overlay_pos"] = "top"
+            ov.cfg.pop("window", None)
+            ov.apply_position(save=True)
+            ov._fit_height()
+            save_config(ov.cfg)
+            self.set_status("字幕条已复位到屏幕顶部", "ok")
+            log("字幕条位置已重置（托盘入口）")
+        except Exception as e:
+            log("重置字幕条位置失败：" + repr(e))
+
     def on_pause(self):
         self.owner.toggle_pause()
-        self.btn_pause.setText("继续" if self.owner.paused else "暂停")
+        running = bool(self.owner.capture and getattr(self.owner.capture, "running", False))
+        if not running and not self.owner.paused:
+            self.btn_pause.setText("开始")
+        else:
+            self.btn_pause.setText("继续" if self.owner.paused else "暂停")
 
     def on_overlay_toggle(self, checked):
         self.cfg["show_overlay"] = bool(checked)
@@ -11311,7 +12369,7 @@ class MainWindow:
         if self.tray is not None:
             ev.ignore()
             self.win.hide()
-            self.tray.showMessage("沉浸字幕", "已最小化到托盘，双击图标可以再打开。",
+            self.tray.showMessage("Oversub 沉浸字幕", "已最小化到托盘，双击图标可以再打开。",
                                   QSystemTrayIcon.Information, 2500)
         else:
             self.owner.quit()
@@ -11412,6 +12470,15 @@ class App:
             self.overlay.refresh_hard_words()
         except Exception:
             pass
+        # 首次启动一次性点亮「快捷键」入口：只做一次，不弹窗打断
+        if not cfg.get("hk_hint_shown"):
+            cfg["hk_hint_shown"] = True
+            save_config(cfg)
+            try:
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(900, self.main._hk_first_hint)
+            except Exception:
+                pass
 
     # ---------------- 全局热键（四个，都可改键） ----------------
     def _hotkey_defs(self):
@@ -11774,6 +12841,10 @@ class App:
             return
         self.capture = AudioCapture(self.cfg, self.seg_q, self._audio_state)
         self.capture.start()
+        try:
+            self.overlay.btn_pause.setText("暂停")
+        except Exception:
+            pass
 
     def _mic_translate(self):
         """麦克风侧用的翻译器：优先离线 Argos，在线引擎就走在线接口。"""
@@ -11819,8 +12890,25 @@ class App:
         if self.capture:
             self.capture.stop()
             self.capture = None
+        try:
+            self.overlay.btn_pause.setText("开始")
+        except Exception:
+            pass
 
     def toggle_pause(self):
+        running = bool(self.capture and getattr(self.capture, "running", False))
+        if not running and not self.paused:
+            # 从未开始：第一次点就是开始。原来直接落进暂停分支，要点两次才真正开始。
+            self.paused = False
+            self.start_capture()
+            self.overlay.set_status("收听中", "ok")
+            self.overlay.btn_pause.setText("暂停")
+            self.main.set_status("收听中", "ok")
+            try:
+                self.main._sync_capture_ui()
+            except Exception:
+                pass
+            return
         if self.paused:
             self.paused = False
             self.start_capture()
@@ -11835,6 +12923,10 @@ class App:
             self.overlay.btn_pause.setText("继续")
             self.main.set_status("已暂停", "")
             self.main.btn_pause.setText("继续")
+        try:
+            self.main._sync_capture_ui()
+        except Exception:
+            pass
 
     def restart_engine(self):
         self.stop_capture()
