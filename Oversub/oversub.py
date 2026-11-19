@@ -322,37 +322,37 @@ OVERLAY_SKINS = {
     "dialog_dark": dict(
         name="深色卡片（默认）", bg=(16, 18, 22), radius=14,
         edge=(255, 255, 255), edge_alpha=None,
-        main="#FFFFFF", sub="#9E9A91",
-        hist="#D8D3C9", hist_sub="#9B978F",
+        main="#FFFFFF", sub="#C6C1B8",
+        hist="#D8D3C9", hist_sub="#B4AFA6",
         align="left", badge_bg=(140, 150, 165, 20), badge_fg="#93A0AD"),
     # 柚子社那类（千恋万花 / 天色幻想岛）：米白半透明、圆角更大、深色文字、
     # 框顶一层浅高光，看起来像“纸质对话框”
     "galgame_light": dict(
         name="Galgame 浅色（柚子社风）", bg=(246, 242, 235), radius=18,
         edge=(255, 255, 255), edge_alpha=200,
-        main="#23232A", sub="#6B6660",
-        hist="#3F3D38", hist_sub="#7A756C",
+        main="#23232A", sub="#45413B",
+        hist="#3F3D38", hist_sub="#57524A",
         align="left", badge_bg=(58, 58, 66, 18), badge_fg="#4A4A54"),
     # ATRI 那类冷调科幻：深蓝黑、细亮边、小圆角、冷白字
     "atri": dict(
         name="ATRI 冷调（深蓝科幻）", bg=(14, 21, 30), radius=10,
         edge=(150, 192, 226), edge_alpha=95,
-        main="#EEF5FC", sub="#8FA5BA",
-        hist="#C4D2E1", hist_sub="#7B90A4",
+        main="#EEF5FC", sub="#B9CCDC",
+        hist="#C4D2E1", hist_sub="#9FB5C7",
         align="left", badge_bg=(150, 192, 226, 22), badge_fg="#A9C3DA"),
     # 音乐播放器的滚动歌词：不画实心框，只垫一层上下渐隐的暗雾，旧句暗、当前句最亮
     "lyrics": dict(
         name="滚动歌词（无框居中）", bg=(0, 0, 0), radius=0, grad=True,
         edge=None, edge_alpha=None,
-        main="#FFFFFF", sub="#B6B1A8",
-        hist="#8B8780", hist_sub="#6C6862",
+        main="#FFFFFF", sub="#C9C4BB",
+        hist="#8B8780", hist_sub="#8B867E",
         align="center", badge_bg=(255, 255, 255, 0), badge_fg="#8B8780"),
     # 电影字幕：横向宽底、上下淡出，白字居中
     "cinema": dict(
         name="电影字幕（宽底白字）", bg=(0, 0, 0), radius=6, grad=True,
         edge=None, edge_alpha=0,
-        main="#FFFFFF", sub="#C9C4BA",
-        hist="#A9A49B", hist_sub="#807B73",
+        main="#FFFFFF", sub="#D8D3C9",
+        hist="#A9A49B", hist_sub="#9A958C",
         align="center", badge_bg=(255, 255, 255, 0), badge_fg="#8B8780"),
 }
 
@@ -3648,22 +3648,6 @@ class Overlay:
         self.spk_label.setVisible(False)
         lay.addWidget(self.spk_label, 0, self.Qt.AlignLeft)
 
-        # 备用快捷按钮（与下面原始收藏 / 朗读重复）：保留对象与连接，不放进界面；
-        # 可见的底部按钮用带状态同步的原始 btn_fav / btn_read
-        self.btn_fav_bar = QPushButton("☆ 收藏")
-        self.btn_fav_bar.setObjectName("fav")
-        self.btn_fav_bar.setFixedHeight(22)
-        self.btn_fav_bar.setFont(self._font(10, False, "Microsoft YaHei"))
-        self.btn_fav_bar.setToolTip("收藏当前这一句（Ctrl+Alt+U）")
-        self.btn_fav_bar.clicked.connect(self._fav_current)
-        self.btn_fav_bar.hide()
-        self.btn_speak_bar = QPushButton("🔊 朗读")
-        self.btn_speak_bar.setFixedHeight(22)
-        self.btn_speak_bar.setFont(self._font(10, False, "Microsoft YaHei"))
-        self.btn_speak_bar.setToolTip("朗读当前句，再点一次停止")
-        self.btn_speak_bar.clicked.connect(self._read_clicked)
-        self.btn_speak_bar.hide()
-
         self.btn_pause = QPushButton("开始")
         self.btn_settings = QPushButton("设置")
         self.btn_quit = QPushButton("关闭")
@@ -3719,44 +3703,8 @@ class Overlay:
         self.btn_star.clicked.connect(self._fav_current)
         self.btn_star.hide()
 
-        # 穿透态抓手：字幕条本体整窗穿透（不挡游戏点击），旁边挂一个始终能点的小胶囊，
-        # ⋯ 进入交互模式、☆ 一键收藏当前句。原来要靠热键进模式再找星标，游戏里太绕。
-        self.hit = QWidget()
-        self.hit.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
-        self.hit.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.hit.setWindowTitle("Oversub 快捷操作")
-        _hl = QHBoxLayout(self.hit)
-        _hl.setContentsMargins(0, 0, 0, 0)
-        _hl.setSpacing(2)
-        _hit_qss = ("QPushButton{background-color:rgba(20,22,26,230);color:#D8D3C9;"
-                    "border:1px solid rgba(255,255,255,40);border-radius:8px;"
-                    "font-size:13px;padding:0px;}"
-                    "QPushButton:hover{background-color:rgba(70,76,86,240);color:#FFFFFF;}")
-        self.btn_hit_more = QPushButton("⋯")
-        self.btn_hit_more.setFixedSize(26, 22)
-        self.btn_hit_more.setFlat(True)
-        self.btn_hit_more.setCursor(Qt.PointingHandCursor)
-        self.btn_hit_more.setStyleSheet(_hit_qss)
-        self.btn_hit_more.setToolTip("点一下进入交互模式（可选中字幕、拖宽、展开历史）")
-        self.btn_hit_more.clicked.connect(lambda: self.set_interactive(True))
-        self.btn_hit_anchor = QPushButton("⇅")
-        self.btn_hit_anchor.setFixedSize(26, 22)
-        self.btn_hit_anchor.setFlat(True)
-        self.btn_hit_anchor.setCursor(Qt.PointingHandCursor)
-        self.btn_hit_anchor.setStyleSheet(_hit_qss)
-        self.btn_hit_anchor.setToolTip("一键把字幕条换到屏幕顶部 / 底部（挡到 HUD 时用）")
-        self.btn_hit_anchor.clicked.connect(self._toggle_anchor)
-        self.btn_hit_fav = QPushButton("☆")
-        self.btn_hit_fav.setFixedSize(26, 22)
-        self.btn_hit_fav.setFlat(True)
-        self.btn_hit_fav.setCursor(Qt.PointingHandCursor)
-        self.btn_hit_fav.setStyleSheet(_hit_qss)
-        self.btn_hit_fav.setToolTip("收藏当前这句（不用进交互模式）")
-        self.btn_hit_fav.clicked.connect(self._fav_current)
-        _hl.addWidget(self.btn_hit_anchor)
-        _hl.addWidget(self.btn_hit_more)
-        _hl.addWidget(self.btn_hit_fav)
-        self.hit.hide()
+        # 外侧悬浮抓手胶囊已移除：它是独立顶层窗口，拖动对话框后容易停留在原地不跟随；
+        # ⋯ 交互、⇅ 锚定、☆ 收藏都已并入底部操作条（bar），跟随对话框一起移动。
 
         self.toast = QLabel("", self.panel)
         self.toast.setFont(self._font(10, False, "Microsoft YaHei"))
@@ -3775,10 +3723,15 @@ class Overlay:
         self.btn_clear_q = QPushButton("清队")
         self.btn_font_minus = QPushButton("A−")
         self.btn_font_plus = QPushButton("A+")
+        self.btn_interact = QPushButton("⋯")
+        self.btn_anchor = QPushButton("⇅")
         self.btn_font_minus.setToolTip("字幕字号 -2（Ctrl+Alt+-）")
         self.btn_font_plus.setToolTip("字幕字号 +2（Ctrl+Alt+=）")
+        self.btn_interact.setToolTip("进入交互模式（可选中字幕、拖宽、展开历史）")
+        self.btn_anchor.setToolTip("一键在屏幕顶部 / 底部之间切换字幕条")
         for b in (self.btn_fav, self.btn_read, self.btn_loop, self.btn_clear_q,
-                  self.btn_font_minus, self.btn_font_plus):
+                  self.btn_font_minus, self.btn_font_plus,
+                  self.btn_interact, self.btn_anchor):
             b.setFixedHeight(22)
             b.setCursor(QCursor(Qt.PointingHandCursor))
             b.setFont(self._font(10, False, "Microsoft YaHei"))
@@ -3799,6 +3752,8 @@ class Overlay:
         self.btn_font_minus.clicked.connect(lambda: self.bump_font(-2))
         self.btn_font_plus.clicked.connect(lambda: self.bump_font(2))
         self.btn_loop.toggled.connect(self._loop_toggled)
+        self.btn_interact.clicked.connect(lambda: self.set_interactive(True))
+        self.btn_anchor.clicked.connect(self._toggle_anchor)
         self.chk_auto.toggled.connect(self._auto_toggled)
 
         # 交互模式事件：鼠标移到卡片上浮出 ☆；在字幕上划词/双击选词后弹小气泡
@@ -4473,10 +4428,6 @@ class Overlay:
             self.btn_star.setText("✓")
             self.btn_star.setStyleSheet(self._star_style_backup +
                                         "color:#10B981;font-weight:700;")
-            try:
-                self.btn_fav_bar.setText("✓ 已收藏")
-            except Exception:
-                pass
             QTimer.singleShot(1000, self._restore_star)
         except Exception:
             pass
@@ -4486,10 +4437,6 @@ class Overlay:
             self.btn_star.setText("☆")
             if getattr(self, "_star_style_backup", None) is not None:
                 self.btn_star.setStyleSheet(self._star_style_backup)
-            try:
-                self.btn_fav_bar.setText("☆ 收藏")
-            except Exception:
-                pass
         except Exception:
             pass
 
@@ -5199,9 +5146,10 @@ class Overlay:
 
     def _chrome(self):
         return [self.btn_pause, self.btn_settings, self.btn_quit, self.chk_auto,
-                self.tts_voice, self.btn_fav_bar, self.btn_speak_bar,
+                self.tts_voice,
                 self.btn_fav, self.btn_read, self.btn_loop,
-                self.btn_clear_q, self.btn_font_minus, self.btn_font_plus]
+                self.btn_clear_q, self.btn_font_minus, self.btn_font_plus,
+                self.btn_interact, self.btn_anchor]
 
     def _apply_mode_visuals(self, on):
         """非交互：字幕上不给任何按钮，只留字幕本身；交互：露出控件 + 淡描边 + 角落提示 + 箭头光标。"""
@@ -5292,7 +5240,7 @@ class Overlay:
         self.mode_hint.setVisible(bool(on))
         self._apply_selectable(bool(on))
         self._apply_mode_visuals(bool(on))
-        self._sync_handle()          # 进交互收起抓手，退出交互再挂回来
+        self._sync_handle()
         try:
             # 困难生词下划线只在交互模式画：非交互时画面上一点额外东西都没有
             self.dst_label.set_mark_mode(bool(on) and bool(self.cfg.get("hard_underline", True)))
@@ -5798,25 +5746,8 @@ class Overlay:
             log("切换字幕条位置失败：" + repr(e))
 
     def _sync_handle(self):
-        """让抓手胶囊跟着字幕条走：贴右上角外侧，穿透态常驻，交互态收起。"""
-        try:
-            if getattr(self, "hit", None) is None:
-                return
-            if not self.win.isVisible() or bool(getattr(self, "_interactive", False)):
-                self.hit.hide()
-                return
-            g = self.win.geometry()
-            scr = self._avail_rect()
-            # 先贴在字幕条右外侧；右边没位置（窗口已贴屏幕右缘）再退回内侧
-            x = g.right() + 4
-            if x + 82 > scr.right():
-                x = g.right() - 82
-            y = max(scr.top() + 2, g.top() + 6)
-            self.hit.move(x, y)
-            self.hit.show()
-            self.hit.raise_()
-        except Exception as e:
-            log("抓手同步失败：" + repr(e))
+        """旧外侧抓手胶囊已移除；此方法保留为空实现，避免既有调用点报错。"""
+        return
 
     def _apply_skin(self):
         """把皮肤的副行颜色、对齐方式应用到当前句（主体颜色由说话人色/皮肤主色决定）。"""
@@ -5827,7 +5758,7 @@ class Overlay:
             self.src_label.setStyleSheet("color:%s;" % sk["sub"])
             self.src_label.setAlignment(al)
             self.dst_label.setAlignment(al)
-            self.status.setStyleSheet("color:%s;" % sk["sub"])
+            self.status.setStyleSheet("color:%s;" % sk["hist"])
             self.dot.setStyleSheet("color:%s;font-size:9px;" % sk["sub"])
             # 复选框 / 音色标签跟着皮肤明暗走，避免浅底上浅字、深底上深字
             if hasattr(self, "chk_auto"):
