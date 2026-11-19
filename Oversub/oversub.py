@@ -3555,7 +3555,7 @@ class Overlay:
         from PySide6.QtCore import Qt, QTimer
         from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                        QPushButton, QFrame, QApplication,
-                                       QCheckBox, QGraphicsDropShadowEffect)
+                                       QCheckBox, QGraphicsDropShadowEffect, QSizePolicy)
         from PySide6.QtGui import QFont, QColor, QCursor
 
         self.Qt = Qt
@@ -3624,6 +3624,9 @@ class Overlay:
 
         # 状态 / 控制行整体装进一个容器：对话框形态下默认收起，只有进交互模式才露出来
         self.top_bar_w = QWidget()
+        self.top_bar_w.setMinimumHeight(24)
+        # 横向撑满、纵向固定：不撑满的话按钮会被左侧状态文字挤掉宽度，最后一个都看不见
+        self.top_bar_w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         bar = QHBoxLayout(self.top_bar_w)
         bar.setSpacing(8)
         bar.setContentsMargins(0, 0, 0, 0)
@@ -3645,23 +3648,21 @@ class Overlay:
         self.spk_label.setVisible(False)
         lay.addWidget(self.spk_label, 0, self.Qt.AlignLeft)
 
-        # 底部操作条最左边是「收藏 / 朗读」，右边才是开始·设置·关闭
-        # —— 游戏里最常按的是收藏和重听，不该藏在右上角
+        # 备用快捷按钮（与下面原始收藏 / 朗读重复）：保留对象与连接，不放进界面；
+        # 可见的底部按钮用带状态同步的原始 btn_fav / btn_read
         self.btn_fav_bar = QPushButton("☆ 收藏")
         self.btn_fav_bar.setObjectName("fav")
         self.btn_fav_bar.setFixedHeight(22)
-        self.btn_fav_bar.setCursor(QCursor(Qt.PointingHandCursor))
         self.btn_fav_bar.setFont(self._font(10, False, "Microsoft YaHei"))
         self.btn_fav_bar.setToolTip("收藏当前这一句（Ctrl+Alt+U）")
         self.btn_fav_bar.clicked.connect(self._fav_current)
+        self.btn_fav_bar.hide()
         self.btn_speak_bar = QPushButton("🔊 朗读")
         self.btn_speak_bar.setFixedHeight(22)
-        self.btn_speak_bar.setCursor(QCursor(Qt.PointingHandCursor))
         self.btn_speak_bar.setFont(self._font(10, False, "Microsoft YaHei"))
         self.btn_speak_bar.setToolTip("朗读当前句，再点一次停止")
         self.btn_speak_bar.clicked.connect(self._read_clicked)
-        bar.addWidget(self.btn_fav_bar)
-        bar.addWidget(self.btn_speak_bar)
+        self.btn_speak_bar.hide()
 
         self.btn_pause = QPushButton("开始")
         self.btn_settings = QPushButton("设置")
@@ -3763,10 +3764,8 @@ class Overlay:
             "color:#BFD9C8;background:rgba(20,24,21,150);border-radius:8px;padding:2px 8px;")
         self.toast.hide()
 
-        # 朗读工具行：收藏 / 朗读 / 循环 + 待朗读队列提示
-        tools = QHBoxLayout()
-        tools.setContentsMargins(0, 0, 0, 0)
-        tools.setSpacing(6)
+        # 底部操作条：循环 / 清队 / 字号 + 队列与模式提示，并入底部单行（bar），
+        # 和 Galgame 一样按钮都贴在对话框下沿，正文占上方区域
         self.btn_fav = QPushButton("☆ 收藏")
         self.btn_fav.setObjectName("fav")
         self.btn_read = QPushButton("朗读")
@@ -3783,19 +3782,17 @@ class Overlay:
             b.setFixedHeight(22)
             b.setCursor(QCursor(Qt.PointingHandCursor))
             b.setFont(self._font(10, False, "Microsoft YaHei"))
-            tools.addWidget(b)
-        tools.addStretch(1)
+            bar.addWidget(b)
         self.queue_hint = QLabel("")
         self.queue_hint.setFont(self._font(9, False, "Microsoft YaHei"))
         self.queue_hint.setStyleSheet("color:#6E6A63;")
         self.queue_hint.setVisible(False)
-        tools.addWidget(self.queue_hint)
+        bar.addWidget(self.queue_hint)
         self.mode_hint = QLabel("")
         self.mode_hint.setFont(self._font(9, False, "Microsoft YaHei"))
         self.mode_hint.setStyleSheet("color:#B47B1E;")
         self.mode_hint.setVisible(False)
-        tools.addWidget(self.mode_hint)
-        lay.addLayout(tools)
+        bar.addWidget(self.mode_hint)
         self.btn_fav.clicked.connect(self._fav_current)
         self.btn_read.clicked.connect(self._read_clicked)
         self.btn_clear_q.clicked.connect(self.clear_read_queue)
@@ -5783,7 +5780,7 @@ class Overlay:
             fs = int(self.cfg.get("font_size") or 20)
         except Exception:
             fs = 20
-        return max(150, min(280, int(fs * 1.5 * 3) + 96))
+        return max(170, min(320, int(fs * 1.5 * 3) + 128))
 
     def _toggle_anchor(self):
         """抓手上的 ⇅：在顶部 / 底部之间来回换，专治挡住游戏 HUD 或挡往站立角色。"""
