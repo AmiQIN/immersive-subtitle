@@ -5731,7 +5731,7 @@ class Overlay:
         return max(200, min(340, int(fs * 1.5 * 3) + 168))
 
     def _toggle_anchor(self):
-        """抓手上的 ⇅：在顶部 / 底部之间来回换，专治挡住游戏 HUD 或挡往站立角色。"""
+        """底部 ⇅：在顶部 / 底部之间来回换，专治挡住游戏 HUD 或挡往站立角色。"""
         try:
             cur = str(self.cfg.get("overlay_pos") or "top")
             self.cfg["overlay_pos"] = "bottom_high" if cur == "top" else "top"
@@ -5963,6 +5963,10 @@ class Overlay:
         try:
             geo = self.win.geometry()
             self.cfg["window"] = {"x": geo.x(), "y": geo.y(), "w": geo.width(), "h": geo.height()}
+        except Exception:
+            pass
+        try:
+            self.quick.close()
         except Exception:
             pass
         try:
