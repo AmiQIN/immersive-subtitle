@@ -5780,7 +5780,7 @@ class Overlay:
             fs = int(self.cfg.get("font_size") or 20)
         except Exception:
             fs = 20
-        return max(170, min(320, int(fs * 1.5 * 3) + 128))
+        return max(200, min(340, int(fs * 1.5 * 3) + 168))
 
     def _toggle_anchor(self):
         """抓手上的 ⇅：在顶部 / 底部之间来回换，专治挡住游戏 HUD 或挡往站立角色。"""
@@ -5873,7 +5873,7 @@ class Overlay:
                     total += self._hist_lay.spacing() * max(0, len(self._hist_widgets) - 1)
                 # 对话框高度是固定的：历史区最多占一半，剩下的留给当前句，免得把正文挤没
                 if str(self.cfg.get("overlay_style") or "dialog") == "dialog":
-                    total = min(total, int(self._dialog_h() * 0.52))
+                    total = min(total, int(self._dialog_h() * 0.42))
                 self.hist_box.setFixedHeight(max(0, total))
             self.panel.layout().invalidate()
             self.panel.layout().activate()
