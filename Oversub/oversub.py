@@ -3706,36 +3706,6 @@ class Overlay:
         # 外侧悬浮抓手胶囊已移除：它是独立顶层窗口，拖动对话框后容易停留在原地不跟随；
         # ⋯ 交互、⇅ 锚定、☆ 收藏都已并入底部操作条（bar），跟随对话框一起移动。
 
-        # ---------------------------------------------------------------- 常驻一键收藏
-        # 穿透态下 bar 上的按钮点不到，收藏得先按热键进交互，绕一圈才点到，太费事。
-        # 这里贴一条不穿透的极窄胶囊（只有 ☆ 收藏 + 朗读），挂在对话框下沿内侧，
-        # 尺寸小、跟着对话框走，不挡正文，抬手就能点。
-        self.quick = QWidget()
-        self.quick.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint
-                                  | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
-        self.quick.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.quick.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        _ql = QHBoxLayout(self.quick)
-        _ql.setContentsMargins(0, 0, 0, 0)
-        _ql.setSpacing(6)
-        self.q_fav = QPushButton("☆")
-        self.q_read = QPushButton("朗读")
-        for _qb in (self.q_fav, self.q_read):
-            _qb.setFixedHeight(22)
-            _qb.setCursor(QCursor(Qt.PointingHandCursor))
-            _qb.setFont(self._font(11, False, "Microsoft YaHei"))
-            _qb.setStyleSheet(
-                "QPushButton{background:rgba(18,20,25,205);border:1px solid rgba(255,255,255,66);"
-                "border-radius:8px;color:#EDE8DF;padding:0px 8px;}"
-                "QPushButton:hover{background:rgba(46,52,62,232);color:#FFFFFF;}"
-                "QPushButton:pressed{background:rgba(66,72,84,238);}")
-            _ql.addWidget(_qb)
-        self.q_fav.setFixedWidth(30)
-        self.q_fav.setToolTip("收藏当前这一句（Ctrl+Alt+U）")
-        self.q_read.setToolTip("朗读当前句，再点一次停止")
-        self.q_fav.clicked.connect(self._fav_current)
-        self.q_read.clicked.connect(self._read_clicked)
-        self.quick.hide()
 
         self.toast = QLabel("", self.panel)
         self.toast.setFont(self._font(10, False, "Microsoft YaHei"))
@@ -5272,7 +5242,6 @@ class Overlay:
         self._apply_selectable(bool(on))
         self._apply_mode_visuals(bool(on))
         self._sync_handle()
-        self._sync_quick()
         try:
             # 困难生词下划线只在交互模式画：非交互时画面上一点额外东西都没有
             self.dst_label.set_mark_mode(bool(on) and bool(self.cfg.get("hard_underline", True)))
@@ -5389,34 +5358,6 @@ class Overlay:
         scr = self.win.screen() or QGuiApplication.primaryScreen()
         return scr.availableGeometry()
 
-    def _sync_quick(self):
-        """常驻收藏 / 朗读胶囊：贴在对话框下沿内侧右端，跟着字幕条走，不挡正文。"""
-        try:
-            if getattr(self, "quick", None) is None:
-                return
-            self.quick.adjustSize()
-            qw, qh = self.quick.width(), self.quick.height()
-            g = self.win.frameGeometry()
-            x = g.right() - qw - 14          # 内侧右下：正好落在对话框底部那条留白里
-            y = g.bottom() - qh - 8
-            scr = self._avail_rect()
-            x = max(scr.left() + 2, min(x, scr.right() - qw - 2))
-            y = max(scr.top() + 2, min(y, scr.bottom() - qh - 2))
-            self.quick.move(int(x), int(y))
-            # 交互模式主窗口那排按钮本来就露着，胶囊让位，别叠两层
-            keep = self.win.isVisible() and not getattr(self, "_interactive", False)
-            if keep and not self.quick.isVisible():
-                self.quick.show()
-                self.quick.raise_()
-            elif not keep and self.quick.isVisible():
-                self.quick.hide()
-            _sig = (int(x), int(y), qw, qh, keep)
-            if _sig != getattr(self, "_quick_sig", None):
-                self._quick_sig = _sig
-                log("常驻胶囊：x=%d y=%d w=%d h=%d 显示=%s" % (x, y, qw, qh, keep))
-        except Exception as e:
-            log("常驻胶囊定位失败：" + repr(e))
-
     def apply_position(self, preset=None, save=False):
         """按预设把字幕条摆好：默认底部居中，离任务栏留 72px，不贴着画面底边。"""
         try:
@@ -5453,7 +5394,6 @@ class Overlay:
                 self.win.move(x, y)
             self._clamp_to_screen()
             self._sync_handle()
-            self._sync_quick()
             if save:
                 self._remember_geometry()
                 save_config(self.cfg)
@@ -5912,7 +5852,6 @@ class Overlay:
             pass
         self._schedule_full_repaint()
         self._sync_handle()
-        self._sync_quick()
 
     def _glass(self, value=None):
         """只有卡片底色带透明度；文字、按钮字、色条全都保持不透明，拖到多淡文字都清晰。
