@@ -3645,6 +3645,24 @@ class Overlay:
         self.spk_label.setVisible(False)
         lay.addWidget(self.spk_label, 0, self.Qt.AlignLeft)
 
+        # 底部操作条最左边是「收藏 / 朗读」，右边才是开始·设置·关闭
+        # —— 游戏里最常按的是收藏和重听，不该藏在右上角
+        self.btn_fav_bar = QPushButton("☆ 收藏")
+        self.btn_fav_bar.setObjectName("fav")
+        self.btn_fav_bar.setFixedHeight(22)
+        self.btn_fav_bar.setCursor(QCursor(Qt.PointingHandCursor))
+        self.btn_fav_bar.setFont(self._font(10, False, "Microsoft YaHei"))
+        self.btn_fav_bar.setToolTip("收藏当前这一句（Ctrl+Alt+U）")
+        self.btn_fav_bar.clicked.connect(self._fav_current)
+        self.btn_speak_bar = QPushButton("🔊 朗读")
+        self.btn_speak_bar.setFixedHeight(22)
+        self.btn_speak_bar.setCursor(QCursor(Qt.PointingHandCursor))
+        self.btn_speak_bar.setFont(self._font(10, False, "Microsoft YaHei"))
+        self.btn_speak_bar.setToolTip("朗读当前句，再点一次停止")
+        self.btn_speak_bar.clicked.connect(self._read_clicked)
+        bar.addWidget(self.btn_fav_bar)
+        bar.addWidget(self.btn_speak_bar)
+
         self.btn_pause = QPushButton("开始")
         self.btn_settings = QPushButton("设置")
         self.btn_quit = QPushButton("关闭")
@@ -4458,6 +4476,10 @@ class Overlay:
             self.btn_star.setText("✓")
             self.btn_star.setStyleSheet(self._star_style_backup +
                                         "color:#10B981;font-weight:700;")
+            try:
+                self.btn_fav_bar.setText("✓ 已收藏")
+            except Exception:
+                pass
             QTimer.singleShot(1000, self._restore_star)
         except Exception:
             pass
@@ -4467,6 +4489,10 @@ class Overlay:
             self.btn_star.setText("☆")
             if getattr(self, "_star_style_backup", None) is not None:
                 self.btn_star.setStyleSheet(self._star_style_backup)
+            try:
+                self.btn_fav_bar.setText("☆ 收藏")
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -5176,7 +5202,8 @@ class Overlay:
 
     def _chrome(self):
         return [self.btn_pause, self.btn_settings, self.btn_quit, self.chk_auto,
-                self.tts_voice, self.btn_fav, self.btn_read, self.btn_loop,
+                self.tts_voice, self.btn_fav_bar, self.btn_speak_bar,
+                self.btn_fav, self.btn_read, self.btn_loop,
                 self.btn_clear_q, self.btn_font_minus, self.btn_font_plus]
 
     def _apply_mode_visuals(self, on):
