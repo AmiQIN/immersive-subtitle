@@ -917,8 +917,9 @@ SCENE_NAMES = {"fps": "FPS / 游戏", "video": "看视频", "chat": "语音聊�
 SCENE_SHORT = {"fps": "FPS", "video": "影视", "chat": "闲聊", "": "未标"}
 
 # ---------------------------------------------------------------- 语种注册表
-# 每条：名称 / 原生写法 / ASR 模型包 / 翻译模型包 / TTS 标识 / 文字方向 / 是否可用
-# 现在只启用英语；其他语种先占位，设置里显示「未安装」，点了给下载指引，不影响当前使用。
+# 每条：名称 / 原生写法 / 翻译包 / TTS 标识 / 文字方向 / 是否可用
+# installed=True 表示这套语种当前真的能用（有本地翻译包 + 界面可切）。
+# 其余几条是预留条目：不会出现在下拉里，也不会给任何“点了就下载”的假入口。
 LANG_REGISTRY = {
     "zh": {"name": "中文", "native": "中文", "asr": "faster-whisper-zh",
            "mt": "argos-en-zh", "tts": "SAPI zh-CN（Huihui）", "rtl": False,
@@ -3671,7 +3672,8 @@ class Overlay:
         ly = QVBoxLayout()
         ly.setContentsMargins(0, 0, 0, 0)
         ly.setSpacing(4)
-        lay.addWidget(self.top_bar_w)
+        # 状态 / 操作条不放在这儿：Galgame 的按钮都贴在对话框下沿，放最上面手指要往上够
+        # 真正的挂载点在 lay.addStretch(1) 之后（见下面“底部操作条”）
 
         self.src_label = QLabel("")
         self.src_label.setWordWrap(True)
@@ -3748,6 +3750,7 @@ class Overlay:
         tools.setContentsMargins(0, 0, 0, 0)
         tools.setSpacing(6)
         self.btn_fav = QPushButton("☆ 收藏")
+        self.btn_fav.setObjectName("fav")
         self.btn_read = QPushButton("朗读")
         self.btn_loop = QPushButton("循环")
         self.btn_loop.setCheckable(True)
@@ -3818,15 +3821,17 @@ class Overlay:
         self._hist_lay.setSpacing(8)
         self.hist_box.setVisible(False)
         # 插到状态行之后、源文/译文之前：历史永远在当前句上方
-        lay.insertWidget(1, self.hist_box)
+        lay.insertWidget(0, self.hist_box)
 
         self.divider = QFrame()
         self.divider.setFixedHeight(1)
         self.divider.setStyleSheet("background:rgba(255,255,255,20);")
         self.divider.setVisible(False)
-        lay.insertWidget(2, self.divider)
+        lay.insertWidget(1, self.divider)
 
+        # 历史在上面、正文居中、按钮在最下面 —— Galgame 对话框的排法
         lay.addStretch(1)
+        lay.addWidget(self.top_bar_w)
 
         self._hist = []             # 当前句之前的历史（滚动缓冲区里除最新一句外的部分）
         self._fav_guard = {}        # 句子防重复：key -> 最近一次收藏的时刻
@@ -5793,12 +5798,20 @@ class Overlay:
         """把皮肤的副行颜色、对齐方式应用到当前句（主体颜色由说话人色/皮肤主色决定）。"""
         _k, sk = skin_of(self.cfg)
         al = self.Qt.AlignHCenter if sk.get("align") == "center" else self.Qt.AlignLeft
+        light = sum(sk["bg"]) / 3.0 > 150 if sk.get("bg") else False
         try:
             self.src_label.setStyleSheet("color:%s;" % sk["sub"])
             self.src_label.setAlignment(al)
             self.dst_label.setAlignment(al)
             self.status.setStyleSheet("color:%s;" % sk["sub"])
             self.dot.setStyleSheet("color:%s;font-size:9px;" % sk["sub"])
+            # 复选框 / 音色标签跟着皮肤明暗走，避免浅底上浅字、深底上深字
+            if hasattr(self, "chk_auto"):
+                self.chk_auto.setStyleSheet(
+                    "QCheckBox{color:%s;}" % ("#2A2A30" if light else "#E8E4DB"))
+            if hasattr(self, "tts_voice"):
+                self.tts_voice.setStyleSheet(
+                    "color:%s;" % ("#5A564F" if light else "#B6B1A8"))
         except Exception:
             pass
 
@@ -5923,18 +5936,23 @@ class Overlay:
         else:
             b = skin["bg"]
             background = "background:rgba(%d,%d,%d,%d);" % (b[0], b[1], b[2], bg)
-        # 浅色皮肤上按钮也得换成深字浅底，否则白底白字直接看不见
+        # 浅色皮肤上按钮也得换成深字浅底，否则白底白字直接看不见；
+        # 无框 / 软底皮肤（歌词、电影）垫在浅色壁纸上时，按钮也要有实体底才看得清。
         light = sum(skin["bg"]) / 3.0 > 150 if skin.get("bg") else False
         if light:
-            btn = ("QPushButton{background:rgba(30,30,36,10);border:1px solid rgba(30,30,36,28);"
-                   "border-radius:9px;color:#4A4A50;font-size:11px;padding:2px 11px;}"
-                   "QPushButton:hover{background:rgba(30,30,36,26);color:#111114;}"
-                   "QPushButton:pressed{background:rgba(30,30,36,40);}")
+            btn = ("QPushButton{background:rgba(255,255,255,215);border:1px solid rgba(30,30,36,70);"
+                   "border-radius:9px;color:#26262C;font-size:11px;padding:3px 12px;}"
+                   "QPushButton:hover{background:rgba(255,255,255,240);color:#111114;}"
+                   "QPushButton:pressed{background:rgba(232,229,222,240);}"
+                   "QPushButton#fav{background:rgba(46,128,90,225);border-color:rgba(46,128,90,225);color:#FFFFFF;}"
+                   "QPushButton#fav:hover{background:rgba(58,150,106,235);color:#FFFFFF;}")
         else:
-            btn = ("QPushButton{background:rgba(255,255,255,14);border:1px solid rgba(255,255,255,24);"
-                   "border-radius:9px;color:#C6C1B9;font-size:11px;padding:2px 11px;}"
-                   "QPushButton:hover{background:rgba(255,255,255,42);color:#FFFFFF;}"
-                   "QPushButton:pressed{background:rgba(255,255,255,66);}")
+            btn = ("QPushButton{background:rgba(24,26,31,210);border:1px solid rgba(255,255,255,70);"
+                   "border-radius:9px;color:#F4F1EA;font-size:11px;padding:3px 12px;}"
+                   "QPushButton:hover{background:rgba(58,64,74,225);color:#FFFFFF;border-color:rgba(255,255,255,110);}"
+                   "QPushButton:pressed{background:rgba(78,84,94,235);}"
+                   "QPushButton#fav{background:rgba(46,128,90,220);border-color:rgba(123,195,155,120);color:#FFFFFF;}"
+                   "QPushButton#fav:hover{background:rgba(58,150,106,235);color:#FFFFFF;}")
         self.panel.setStyleSheet(
             "#panel{%s%sborder-radius:%dpx;}"
             "QLabel{background:transparent;}"
@@ -6071,16 +6089,18 @@ def build_settings(owner):
     for code, meta in SOURCE_LANGS.items():
         src_box.addItem("%s %s" % (meta.get("name"), meta.get("native")))
     src_box.setEnabled(False)
-    src_box.setToolTip("现阶段 ASR 固定抓中文；后续版本按语种注册表放开")
+    src_box.setToolTip("源语言不用手动选：说中文按中文转写，说英文按英文转写，由每句话自动判定")
     row.addWidget(src_box, 1)
     row.addSpacing(12)
     row.addWidget(QLabel("目标语言"))
     tgt_box = QComboBox()
     tgt_codes = []
     for code, meta in LANG_REGISTRY.items():
+        # 只列真正可用的语种：没有离线包的语种不进下拉，避免选了一个用不了的选项
+        if not meta.get("installed"):
+            continue
         tgt_codes.append(code)
-        tgt_box.addItem("%s %s%s" % (meta.get("name"), meta.get("native"),
-                                     "（已安装）" if meta.get("installed") else "（未安装）"))
+        tgt_box.addItem("%s %s" % (meta.get("name"), meta.get("native")))
     cur_tl = str(cfg.get("target_lang") or "en")
     if cur_tl in tgt_codes:
         tgt_box.setCurrentIndex(tgt_codes.index(cur_tl))
@@ -6095,18 +6115,14 @@ def build_settings(owner):
 
     def _lang_desc(code):
         m = lang_meta(code)
-        return "%s：ASR %s ｜ 翻译 %s ｜ TTS %s ｜ %s" % (
-            m.get("native", code), m.get("asr", ""), m.get("mt", ""), m.get("tts", ""),
+        return "%s：识别通用 Whisper 模型 ｜ 翻译本地 Argos 包 ｜ 朗读 Windows 系统语音 ｜ %s" % (
+            m.get("native", code),
             "RTL 从右到左" if m.get("rtl") else "LTR 从左到右")
 
     def _update_lang_status(*_a):
         code = tgt_codes[tgt_box.currentIndex()]
         meta = lang_meta(code)
-        if meta.get("installed"):
-            lang_status.setText("当前目标语种：%s。%s" % (meta.get("name"), _lang_desc(code)))
-        else:
-            lang_status.setText("%s 尚未安装（%s）。点选会提示下载包，当前仍用英语，不会影响正在使用。" % (
-                meta.get("name"), _lang_desc(code)))
+        lang_status.setText("当前目标语种：%s。%s" % (meta.get("name"), _lang_desc(code)))
     _update_lang_status()
 
     def _on_lang_pick(idx):
@@ -6116,12 +6132,12 @@ def build_settings(owner):
             state["tl"] = code
             _update_lang_status()
             return
-        meta = lang_meta(code)
+        # 真话：这个语种当前没有可用的离线翻译包，不是“点一下就会下载”
         QMessageBox.information(
-            root.parentWidget() or None, "语种未安装",
-            "「%s」还没安装离线包：\nASR：%s\n翻译：%s\nTTS：%s\n\n"
-            "下载后在这里重新选择即可；现在仍继续使用英语，不影响识别和字幕。"
-            % (meta.get("name"), meta.get("asr"), meta.get("mt"), meta.get("tts")))
+            root.parentWidget() or None, "该语种暂不可用",
+            "「%s」当前版本没有内置离线翻译包，只有 中文 ↔ 英语 可用。\n"
+            "识别模型本身支持多语种，缺的是对应语种的翻译包。"
+            % lang_meta(code).get("name"))
         tgt_box.blockSignals(True)
         tgt_box.setCurrentIndex(tgt_codes.index(state["tl"]))
         tgt_box.blockSignals(False)
@@ -6154,91 +6170,167 @@ def build_settings(owner):
 
     # 语种管理面板：列出全部语种，状态 / 字体 / 下载与删除入口
     from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
-    lang_table = QTableWidget(len(LANG_REGISTRY), 7)
-    lang_table.setHorizontalHeaderLabels(
-        ["语种", "ASR 包", "翻译包", "TTS", "方向", "状态", "渲染字体"])
-    lang_table.verticalHeader().setVisible(False)
-    lang_table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
-    lang_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-    fonts_cfg = dict(cfg.get("lang_fonts") or {})
-    lang_codes = list(LANG_REGISTRY.keys())
-    for i, code in enumerate(lang_codes):
-        m = LANG_REGISTRY[code]
-        vals = (m.get("name"), m.get("asr"), m.get("mt"), m.get("tts"),
-                "RTL" if m.get("rtl") else "LTR",
-                "已安装" if m.get("installed") else "未下载",
-                fonts_cfg.get(code) or m.get("font") or "")
-        for j, v in enumerate(vals):
-            it = QTableWidgetItem(str(v))
-            if j != 6:
-                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            lang_table.setItem(i, j, it)
-    lang_table.setColumnWidth(0, 92)
-    lang_table.setColumnWidth(1, 180)
-    lang_table.setColumnWidth(2, 120)
-    lang_table.setColumnWidth(3, 150)
-    lang_table.setColumnWidth(4, 56)
-    lang_table.setColumnWidth(5, 66)
-    lang_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
-    lang_table.setMinimumHeight(210)
-    root.addWidget(lang_table)
+    # ---------------- 本地翻译包：真实状态 + 真下载 / 真卸载 ----------------
+    # 以前这里是一张 12 行的假表（全标「未下载」），按钮只弹一句“下载入口（预留）”。
+    # 现在只列真实安装过的东西，按钮也走 Argos 的真实接口：缺包就下，有包就能卸。
+    pkg_hint = QLabel(
+        "识别：一个多语种 Whisper 模型就够，不需要按语种单独下载。\n"
+        "翻译：中文 ↔ 英语 用本地 Argos 离线包，下表是真实安装状态。\n"
+        "朗读：走 Windows 自带语音（SAPI），音色随系统语言包，软件里不下载音色。")
+    pkg_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    pkg_hint.setWordWrap(True)
+    root.addWidget(pkg_hint)
+
+    pkg_table = QTableWidget(0, 3)
+    pkg_table.setHorizontalHeaderLabels(["语言对", "包版本", "状态"])
+    pkg_table.verticalHeader().setVisible(False)
+    pkg_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    pkg_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+    pkg_table.setColumnWidth(0, 150)
+    pkg_table.setColumnWidth(1, 90)
+    pkg_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+    pkg_table.setMinimumHeight(120)
+    pkg_table.setMaximumHeight(170)
+    root.addWidget(pkg_table)
+
+    pkg_state = QLabel("")
+    pkg_state.setStyleSheet("color:#8C8781;font-size:11px;")
+    pkg_state.setWordWrap(True)
+    root.addWidget(pkg_state)
 
     row = QHBoxLayout()
-    btn_lang_dl = QPushButton("下载选中语种")
-    btn_lang_del = QPushButton("删除选中离线包")
-    for b in (btn_lang_dl, btn_lang_del):
+    btn_pkg_fill = QPushButton("检查并补装翻译包")
+    btn_pkg_del = QPushButton("卸载选中的包")
+    for b in (btn_pkg_fill, btn_pkg_del):
         b.setCursor(Qt.PointingHandCursor)
         b.setFixedHeight(28)
         row.addWidget(b)
     row.addStretch(1)
     root.addLayout(row)
-    lang_mgmt_hint = QLabel("每个语种可以单独下模型、单独配字体，避免一次性下载全部模型占磁盘；"
-                            "下载入口已预留，离线包分发接入后即可直接用。")
-    lang_mgmt_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    lang_mgmt_hint.setWordWrap(True)
-    root.addWidget(lang_mgmt_hint)
 
-    def _sel_lang():
-        i = lang_table.currentRow()
-        return lang_codes[i] if 0 <= i < len(lang_codes) else ""
+    _pkg_busy = {"on": False}
 
-    def _download_lang():
+    def _installed_pairs():
+        try:
+            import argostranslate.package as AP
+            return [(p.from_code, p.to_code, str(getattr(p, "package_version", "")))
+                    for p in AP.get_installed_packages()]
+        except Exception as e:
+            log("读取本地翻译包失败：" + repr(e))
+            return []
+
+    def _refresh_pkg_table():
+        rows = _installed_pairs()
+        pkg_table.setRowCount(len(rows))
+        for i, (a, b, v) in enumerate(rows):
+            for j, val in enumerate(("%s → %s" % (a, b), v, "已安装")):
+                it = QTableWidgetItem(val)
+                it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                pkg_table.setItem(i, j, it)
+        if not rows:
+            pkg_state.setText("本机还没有任何翻译包，点「检查并补装翻译包」会真的去 Argos 源下载。")
+
+    _refresh_pkg_table()
+
+    def _need_pairs():
+        sl = str(cfg.get("source_lang") or "zh")
+        tl = str(cfg.get("target_lang") or "en")
+        pairs = [(sl, tl)]
+        if (tl, sl) not in pairs:
+            pairs.append((tl, sl))
+        return pairs
+
+    def _fill_packages():
+        if _pkg_busy["on"]:
+            return
+        from PySide6.QtWidgets import QApplication
+        pairs = _need_pairs()
+        have = [(a, b) for a, b, _v in _installed_pairs()]
+        missing = [p for p in pairs if p not in have]
+        if not missing:
+            pkg_state.setText("当前语种对的翻译包都已安装：%s。如需重装，先卸载再补装。"
+                              % "、".join("%s → %s" % p for p in pairs))
+            return
+        _pkg_busy["on"] = True
+        btn_pkg_fill.setEnabled(False)
+        pkg_state.setText("正在从 Argos 源下载 %s（约 100MB 级，取决于网络，过程不可中断）……"
+                          % "、".join("%s → %s" % p for p in missing))
+        QApplication.processEvents()
+
+        def _worker():
+            res = {"ok": [], "err": "", "done": False}
+            try:
+                import argostranslate.package as AP
+                AP.update_package_index()
+                for a, b in missing:
+                    AP.install_package_for_language_pair(a, b)
+                    res["ok"].append((a, b))
+            except Exception as e:
+                res["err"] = "%r" % e
+            res["done"] = True
+            holder["res"] = res
+
+        import threading
+        holder = {}
+        threading.Thread(target=_worker, daemon=True).start()
+
+        from PySide6.QtCore import QTimer
+
+        def _poll():
+            res = holder.get("res")
+            if res is None or not res.get("done"):
+                QTimer.singleShot(400, _poll)
+                return
+            _after_pkg_fill([res.get("ok") or [], res.get("err") or ""])
+
+        QTimer.singleShot(400, _poll)
+        return
+
+    def _after_pkg_fill(payload):
+        ok, err = (payload[0], payload[1]) if payload else ([], "")
+        _pkg_busy["on"] = False
+        btn_pkg_fill.setEnabled(True)
+        _refresh_pkg_table()
+        if ok:
+            pkg_state.setText("已安装：%s。可以回到顶部切换语种了。"
+                              % "、".join("%s → %s" % p for p in ok))
+            log("翻译包下载完成：%s" % ok)
+        elif err:
+            pkg_state.setText("下载失败：%s（网络不通或被墙时，只能手动放离线包）" % err)
+            log("翻译包下载失败：%s" % err)
+        else:
+            pkg_state.setText("没有可下载的语言对。")
+
+    def _uninstall_selected():
         from PySide6.QtWidgets import QMessageBox
-        code = _sel_lang()
-        if not code:
-            QMessageBox.information(root.parentWidget() or None, "语种管理", "先在列表里选一个语种。")
+        i = pkg_table.currentRow()
+        rows = _installed_pairs()
+        if not (0 <= i < len(rows)):
+            QMessageBox.information(root.parentWidget() or None, "翻译包", "先在表里选一行。")
             return
-        m = lang_meta(code)
-        if m.get("installed"):
-            QMessageBox.information(root.parentWidget() or None, "语种管理",
-                                    "「%s」已安装，可以直接在顶部切换到该语种。" % m.get("name"))
+        a, b, _v = rows[i]
+        ans = QMessageBox.question(
+            root.parentWidget() or None, "卸载翻译包",
+            "确定卸载 %s → %s 的本地翻译包？卸载后该方向将无法翻译，可以再点补装重新下载。"
+            % (a, b))
+        if ans != QMessageBox.Yes:
             return
-        QMessageBox.information(
-            root.parentWidget() or None, "下载入口（预留）",
-            "「%s」需要下载：\nASR：%s\n翻译：%s\nTTS：%s\n\n"
-            "当前版本只内置英语；打包好的离线包接进来后，这里会直接开始下载并刷新状态。"
-            % (m.get("name"), m.get("asr"), m.get("mt"), m.get("tts")))
+        try:
+            import argostranslate.package as AP
+            for p in AP.get_installed_packages():
+                if (p.from_code, p.to_code) == (a, b):
+                    AP.uninstall(p)
+                    break
+            log("已卸载翻译包：%s → %s" % (a, b))
+            _refresh_pkg_table()
+            pkg_state.setText("已卸载 %s → %s。" % (a, b))
+        except Exception as e:
+            pkg_state.setText("卸载失败：%r" % e)
+            log("卸载翻译包失败：%r" % e)
 
-    def _delete_lang():
-        from PySide6.QtWidgets import QMessageBox
-        code = _sel_lang()
-        if not code:
-            QMessageBox.information(root.parentWidget() or None, "语种管理", "先在列表里选一个语种。")
-            return
-        m = lang_meta(code)
-        if m.get("installed"):
-            QMessageBox.information(
-                root.parentWidget() or None, "语种管理",
-                "「%s」是当前可用语种，删了会影响正在使用的识别/翻译，这里不提供删除。"
-                % m.get("name"))
-            return
-        QMessageBox.information(
-            root.parentWidget() or None, "删除入口（预留）",
-            "「%s」尚未下载，没有可删的离线包。已安装的其他尺寸模型，"
-            "可以到模型管理区按需清理缓存。" % m.get("name"))
+    btn_pkg_fill.clicked.connect(_fill_packages)
+    btn_pkg_del.clicked.connect(_uninstall_selected)
 
-    btn_lang_dl.clicked.connect(_download_lang)
-    btn_lang_del.clicked.connect(_delete_lang)
     head("语音识别")
     row = QHBoxLayout()
     row.addWidget(QLabel("识别模型（ASR）"))
@@ -7106,14 +7198,8 @@ def build_settings(owner):
         cfg["mt_size"] = mt_box.currentData() or "small"
         cfg["rtl_overlay"] = bool(chk_rtl.isChecked())
         cfg["font_family"] = font_edit.text().strip()
-        fonts = {}
-        for i, code in enumerate(lang_codes):
-            cell = lang_table.item(i, 6)
-            fam = cell.text().strip() if cell else ""
-            default_fam = str(LANG_REGISTRY.get(code, {}).get("font") or "")
-            if fam and fam != default_fam:
-                fonts[code] = fam
-        cfg["lang_fonts"] = fonts
+        # 旧的逐语种字体表已移除：保留本机已存的逐语种字体设置，不再从已删除的表格读取
+        cfg["lang_fonts"] = dict(cfg.get("lang_fonts") or {})
         try:
             profiles = dict(cfg.get("lang_profiles") or {})
             profiles[cfg["target_lang"]] = {
@@ -9302,13 +9388,15 @@ class MainWindow:
         trow.addWidget(QLabel("配置语种"))
         self.tts_lang_box = QComboBox()
         for code, meta in LANG_REGISTRY.items():
+            if not meta.get("installed"):
+                continue        # 只列真正能朗读的语种，和字幕下拉保持一致
             self.tts_lang_box.addItem("%s（%s）" % (meta["name"], meta["native"]), code)
         trow.addWidget(self.tts_lang_box)
         trow.addWidget(QLabel("TTS 引擎"))
         self.tts_engine_box = QComboBox()
-        self.tts_engine_box.addItem("离线 SAPI（优先）", "offline")
-        self.tts_engine_box.addItem("在线（预留，未接）", "online")
-        self.tts_engine_box.setEnabled(True)
+        self.tts_engine_box.addItem("Windows 离线语音（SAPI）", "offline")
+        self.tts_engine_box.setToolTip("当前只接了这一种；在线 TTS 没有实现，所以不放在下拉里")
+        self.tts_engine_box.setEnabled(False)
         trow.addWidget(self.tts_engine_box)
         trow.addStretch(1)
         vtts.addLayout(trow)
@@ -9317,8 +9405,8 @@ class MainWindow:
         vrow.addWidget(QLabel("音色"))
         self.tts_voice_box = QComboBox()
         vrow.addWidget(self.tts_voice_box, 1)
-        self.btn_tts_pack = QPushButton("音色包管理")
-        self.btn_tts_pack.setToolTip("未装该语种音色包时，自动朗读会置灰并提示下载")
+        self.btn_tts_pack = QPushButton("音色来源")
+        self.btn_tts_pack.setToolTip("查系统里有没有这个语种的语音包，没有就告诉你去哪装（软件内不下载音色）")
         vrow.addWidget(self.btn_tts_pack)
         vtts.addLayout(vrow)
         orow = QHBoxLayout()
@@ -9716,10 +9804,11 @@ class MainWindow:
         self.lang_box.blockSignals(True)
         self.lang_box.clear()
         for code, meta in LANG_REGISTRY.items():
+            if not meta.get("installed"):
+                continue        # 用不了的语种不进主界面下拉，避免选到一个没东西的选项
             nm, nat = meta.get("name"), meta.get("native")
             label = nm if nm == nat else "%s %s" % (nm, nat)
-            self.lang_box.addItem("%s%s" % (
-                label, "" if meta.get("installed") else "（未安装）"), code)
+            self.lang_box.addItem(label, code)
         cur = str(self.cfg.get("target_lang") or "en")
         for i in range(self.lang_box.count()):
             if self.lang_box.itemData(i) == cur:
@@ -9810,11 +9899,11 @@ class MainWindow:
             return
         meta = lang_meta(code)
         QMessageBox.information(
-            self.win, "语种未安装",
-            "「%s」还没安装离线包：\nASR：%s\n翻译：%s\nTTS：%s\n\n"
-            "到设置页「语种管理」可以下载；现在仍继续使用%s。"
-            % (meta.get("name"), meta.get("asr"), meta.get("mt"), meta.get("tts"),
-               lang_name(self.cfg.get("target_lang") or "en")))
+            self.win, "该语种暂不可用",
+            "「%s」当前版本没有内置本地翻译包，只有 中文 ↔ 英语 可用。\n"
+            "识别模型本身支持多语种，缺的是对应方向的翻译包；不会假装提供一个下载按钮。\n\n"
+            "现在仍继续使用%s。"
+            % (meta.get("name"), lang_name(self.cfg.get("target_lang") or "en")))
         self._fill_lang_box()
 
     def apply_lang_fonts(self):
@@ -10387,12 +10476,30 @@ class MainWindow:
     def lab_tts_pack(self):
         from PySide6.QtWidgets import QMessageBox
         code = self._tts_lang()
-        QMessageBox.information(
-            self.win, "音色包管理",
-            "当前使用系统 SAPI 离线音色，不需要单独下载。\n"
-            "语种：%s\n"
-            "音色包下载 / 删除入口已预留，后续接入多语种离线音色包后在此管理。"
-            % LANG_REGISTRY.get(code, {}).get("name", code))
+        # 音色来自 Windows 自己的 SAPI，软件里没有“音色包”可下载，这里只做真实检测 + 指路
+        _kw = {"zh": "Chinese", "en": "English", "ja": "Japanese", "ko": "Korean",
+               "fr": "French", "de": "German", "es": "Spanish", "ar": "Arabic"}
+        names = []
+        try:
+            names = list(getattr(self.owner.overlay.tts, "_voices", []) or [])
+        except Exception:
+            names = []
+        word = _kw.get(code, "")
+        have = [v for v in names if word and word.lower() in str(v).lower()]
+        label = LANG_REGISTRY.get(code, {}).get("name", code)
+        if have:
+            QMessageBox.information(
+                self.win, "朗读音色",
+                "朗读用的是 Windows 自带语音（SAPI），软件内不需要下载音色包。\n\n"
+                "语种：%s\n系统里检测到：%s\n\n"
+                "想加更多音色：Windows 设置 → 时间和语言 → 语言 → 添加语言，勾选「语音包」。"
+                % (label, "、".join(have[:5])))
+        else:
+            QMessageBox.warning(
+                self.win, "系统里没有这个语种的音色",
+                "「%s」在系统里没有找到语音包，朗读按钮会是灰的。\n\n"
+                "安装方法：Windows 设置 → 时间和语言 → 语言 → 添加语言 → "
+                "在「语音」一栏勾上对应语音包，装完回到这里直接可用。" % label)
 
     def _pick_scene_tag(self):
         from PySide6.QtWidgets import QMenu
@@ -10996,13 +11103,14 @@ class MainWindow:
             m = LANG_REGISTRY[code]
             vals = (m.get("name"), "zh→%s" % code,
                     "ASR %s ｜ 翻译 %s ｜ TTS %s" % (m.get("asr"), m.get("mt"), m.get("tts")),
-                    "已安装" if m.get("installed") else "可下载",
+                    "可用" if m.get("installed") else "未接入",
                     "已挂载" if code in DICT_PARSERS else "未挂载")
             for j, v in enumerate(vals):
                 self.lab_lang_table.setItem(i, j, QTableWidgetItem(str(v)))
         n_ok = sum(1 for c in codes if LANG_REGISTRY[c].get("installed"))
         self.lab_lang_hint.setText(
-            "共 %d 个语种，%d 个已安装；未安装的只显示包信息，不阻塞当前使用。" % (len(codes), n_ok))
+            "共 %d 个语种，其中 %d 个可用（有本地翻译包）；未接入的不出现在下拉里，也不提供假下载。"
+            % (len(codes), n_ok))
 
         self.lab_dict_table.setRowCount(len(codes))
         for i, code in enumerate(codes):
