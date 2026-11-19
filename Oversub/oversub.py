@@ -3757,6 +3757,17 @@ class Overlay:
         self.btn_anchor.clicked.connect(self._toggle_anchor)
         self.chk_auto.toggled.connect(self._auto_toggled)
 
+        # ------------------------------------------------------------------ 悬停接管
+        # 穿透态下鼠标点不到字幕条里的按钮。这里用一个极轻的定时器盯光标位置：
+        # 只有光标压在 ☆收藏 / 朗读 的矩形上时，才临时取消穿透；移开马上还回去。
+        # 不新开窗口、不改层级，游戏照常点，只有停在按钮上那一下会被接管。
+        from PySide6.QtCore import QTimer
+        self._hot_timer = QTimer(self.win)
+        self._hot_timer.setInterval(60)
+        self._hot_timer.timeout.connect(self._hot_check)
+        self._hot_timer.start()
+        self._hot_on = False
+
         # 交互模式事件：鼠标移到卡片上浮出 ☆；在字幕上划词/双击选词后弹小气泡
         from PySide6.QtCore import QObject
 
@@ -5145,10 +5156,45 @@ class Overlay:
         w.show()
         self._pins.append(w)
 
+    def _hot_check(self):
+        """光标压到底部按钮上就临时接管鼠标，移开还回穿透；其它区域一律不拦。"""
+        try:
+            if getattr(self, "_interactive", False) or not self.win.isVisible():
+                if self._hot_on:
+                    self._set_pass_through(True)
+                return
+            from PySide6.QtGui import QCursor
+            pos = QCursor.pos()
+            inside = False
+            for b in (getattr(self, "btn_fav", None), getattr(self, "btn_read", None)):
+                if b is None or not b.isVisible():
+                    continue
+                g = b.rect()
+                g.moveTopLeft(b.mapToGlobal(g.topLeft()))
+                if g.contains(pos):
+                    inside = True
+                    break
+            if inside and not self._hot_on:
+                self._set_pass_through(False)
+            elif not inside and self._hot_on:
+                self._set_pass_through(True)
+        except Exception:
+            pass
+
+    def _set_pass_through(self, on):
+        from PySide6.QtCore import Qt as _Qt
+        try:
+            self.win.setAttribute(_Qt.WA_TransparentForMouseEvents, bool(on))
+            self._hot_on = not bool(on)
+            if not on:
+                self.win.raise_()
+        except Exception:
+            pass
+
     def _chrome(self):
         return [self.btn_pause, self.btn_settings, self.btn_quit, self.chk_auto,
                 self.tts_voice,
-                self.btn_fav, self.btn_read, self.btn_loop,
+                self.btn_loop,
                 self.btn_clear_q, self.btn_font_minus, self.btn_font_plus,
                 self.btn_interact, self.btn_anchor]
 
@@ -5157,6 +5203,12 @@ class Overlay:
         for w in self._chrome():
             try:
                 w.setVisible(bool(on))
+            except Exception:
+                pass
+        # ☆ 收藏 / 朗读 常驻底部：交互与否都露着，位置固定在下沿，不用到处找
+        for _b in (self.btn_fav, self.btn_read):
+            try:
+                _b.setVisible(True)
             except Exception:
                 pass
         if not on:
