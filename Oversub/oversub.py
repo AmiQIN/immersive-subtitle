@@ -191,7 +191,7 @@ DEFAULT_CONFIG = {
     "device": "auto",
     "show_source": True,
     "font_size": 22,
-    "overlay_prev_rows": 2,       # 字幕条里除当前句外还留几句历史；0 = 只显示当前句
+    "overlay_prev_rows": 0,       # 字幕条里除当前句外还留几句历史；0 = 只显示当前句（对话框形态）
     "overlay_idle_hide": 8,       # 多久没有新句就把上一句淡出（秒）
     "opacity": 0.9,
     "window": {"x": 400, "y": 840, "w": 1000, "h": 120},
@@ -200,6 +200,7 @@ DEFAULT_CONFIG = {
     "hold_scale": 1.0,
     "show_overlay": True,
     "overlay_pos": "top",         # bottom / bottom_high / top / free：字幕条出现的位置（默认顶部锚定）
+    "overlay_skin": "dialog_dark",  # 字幕皮肤：dialog_dark / galgame_light / atri / lyrics / cinema
     "overlay_style": "dialog",    # dialog = Galgame 对话框（高度恒定、底边死锁）｜ banner = 旧自适应条
     "overlay_dialog_h": 0,        # 对话框固定高度；0 = 按字号自动算（约 3 行正文）
     "overlay_gap_top": 8,         # 顶部锚定时离屏幕上沿的像素；调大可避开游戏 HUD
@@ -312,6 +313,53 @@ DEFAULT_CONFIG = {
     "mt_size": "small",                 # 翻译模型尺寸（预留：small/base）
     "filter_by_lang": False,            # 生词本按当前目标语种隔离筛选
 }
+
+# ---------------------------------------------------------------- 字幕皮肤
+# 只影响外观（底色 / 描边 / 圆角 / 文字颜色 / 对齐），不动采集、翻译、历史等任何逻辑。
+# 加新皮肤：在下面加一条即可，渲染处按 key 取值，不用改别的地方。
+OVERLAY_SKINS = {
+    # 默认：深色半透明卡片，微圆角，白字（现有形态）
+    "dialog_dark": dict(
+        name="深色卡片（默认）", bg=(16, 18, 22), radius=14,
+        edge=(255, 255, 255), edge_alpha=None,
+        main="#FFFFFF", sub="#9E9A91",
+        hist="#D8D3C9", hist_sub="#9B978F",
+        align="left", badge_bg=(140, 150, 165, 20), badge_fg="#93A0AD"),
+    # 柚子社那类（千恋万花 / 天色幻想岛）：米白半透明、圆角更大、深色文字、
+    # 框顶一层浅高光，看起来像“纸质对话框”
+    "galgame_light": dict(
+        name="Galgame 浅色（柚子社风）", bg=(246, 242, 235), radius=18,
+        edge=(255, 255, 255), edge_alpha=200,
+        main="#23232A", sub="#6B6660",
+        hist="#3F3D38", hist_sub="#7A756C",
+        align="left", badge_bg=(58, 58, 66, 18), badge_fg="#4A4A54"),
+    # ATRI 那类冷调科幻：深蓝黑、细亮边、小圆角、冷白字
+    "atri": dict(
+        name="ATRI 冷调（深蓝科幻）", bg=(14, 21, 30), radius=10,
+        edge=(150, 192, 226), edge_alpha=95,
+        main="#EEF5FC", sub="#8FA5BA",
+        hist="#C4D2E1", hist_sub="#7B90A4",
+        align="left", badge_bg=(150, 192, 226, 22), badge_fg="#A9C3DA"),
+    # 音乐播放器的滚动歌词：不画实心框，只垫一层上下渐隐的暗雾，旧句暗、当前句最亮
+    "lyrics": dict(
+        name="滚动歌词（无框居中）", bg=(0, 0, 0), radius=0, grad=True,
+        edge=None, edge_alpha=None,
+        main="#FFFFFF", sub="#B6B1A8",
+        hist="#8B8780", hist_sub="#6C6862",
+        align="center", badge_bg=(255, 255, 255, 0), badge_fg="#8B8780"),
+    # 电影字幕：横向宽底、上下淡出，白字居中
+    "cinema": dict(
+        name="电影字幕（宽底白字）", bg=(0, 0, 0), radius=6, grad=True,
+        edge=None, edge_alpha=0,
+        main="#FFFFFF", sub="#C9C4BA",
+        hist="#A9A49B", hist_sub="#807B73",
+        align="center", badge_bg=(255, 255, 255, 0), badge_fg="#8B8780"),
+}
+
+
+def skin_of(cfg):
+    key = str(cfg.get("overlay_skin") or "dialog_dark")
+    return key, OVERLAY_SKINS.get(key) or OVERLAY_SKINS["dialog_dark"]
 
 
 def log(msg):
@@ -3568,11 +3616,14 @@ class Overlay:
         hrow.setSpacing(0)
 
         lay = QVBoxLayout()
-        lay.setContentsMargins(19, 10, 16, 13)
-        lay.setSpacing(6)
+        # Galgame 对话框的内边距：文字离左 26、上下各 16 左右，读起来像一块对话框而不是通知
+        lay.setContentsMargins(26, 14, 24, 16)
+        lay.setSpacing(4)
         hrow.addLayout(lay, 1)
 
-        bar = QHBoxLayout()
+        # 状态 / 控制行整体装进一个容器：对话框形态下默认收起，只有进交互模式才露出来
+        self.top_bar_w = QWidget()
+        bar = QHBoxLayout(self.top_bar_w)
         bar.setSpacing(8)
         bar.setContentsMargins(0, 0, 0, 0)
         self.dot = QLabel("●")
@@ -3591,7 +3642,7 @@ class Overlay:
             "color:#7BC39B;background:rgba(123,195,155,28);"
             "border-radius:8px;padding:1px 8px;")
         self.spk_label.setVisible(False)
-        bar.addWidget(self.spk_label)
+        lay.addWidget(self.spk_label, 0, self.Qt.AlignLeft)
 
         self.btn_pause = QPushButton("开始")
         self.btn_settings = QPushButton("设置")
@@ -3617,7 +3668,10 @@ class Overlay:
         self.tts_voice.setFont(self._font(9, False, "Microsoft YaHei"))
         self.tts_voice.setStyleSheet("color:#6E6A63;")
         bar.addWidget(self.tts_voice)
-        lay.addLayout(bar)
+        ly = QVBoxLayout()
+        ly.setContentsMargins(0, 0, 0, 0)
+        ly.setSpacing(4)
+        lay.addWidget(self.top_bar_w)
 
         self.src_label = QLabel("")
         self.src_label.setWordWrap(True)
@@ -3890,21 +3944,31 @@ class Overlay:
                 self.divider.setVisible(False)
                 return
             rows = rows[: max(0, self._scroll_rows() - 1)]
+            if not rows:
+                # 对话框形态只显示当前句：历史为空时整块历史区收起，
+                # 不能留一个空 div 把正文挤下去
+                self.hist_box.setVisible(False)
+                if hasattr(self, "divider"):
+                    self.divider.setVisible(False)
+                return
             rows = list(reversed(rows))          # 旧的在上，紧挨当前句的是上一句
             n = len(rows)
             on = bool(getattr(self, "_interactive", False))
             en_size = self._hist_size()
             zh_size = max(10, int(round(en_size * 0.84)))
             inner = max(220, self.win.width() - self.MARGIN * 2 - 3 - 35)
+            _skey, _sk = skin_of(self.cfg)
+            _light = bool(_sk.get("bg")) and sum(_sk["bg"]) / 3.0 > 150
+            _halign = _Qt.AlignHCenter if _sk.get("align") == "center" else _Qt.AlignLeft
             for i, item in enumerate(rows):
                 en, zh, spk = item[0], item[1], item[2]
                 age = (n - 1 - i)                # 0 = 最新
-                base = "#D8D3C9"                 # 历史统一中性色，只让当前句带说话人颜色，避免整条花花绿绿
+                base = _sk.get("hist") or "#D8D3C9"
                 strength = (0.92 if on else 0.62) - min(0.42, age * 0.07)
                 if on:
                     strength = max(0.45, strength)     # 交互模式提亮，可读可选中
-                col = self._dim(base, strength)
-                zh_col = self._dim("#9B978F", strength - 0.12)
+                col = self._dim(base, strength, _light)
+                zh_col = self._dim(_sk.get("hist_sub") or "#9B978F", strength - 0.12, _light)
                 w = QWidget()
                 v = QVBoxLayout(w)
                 v.setContentsMargins(0, 0, 0, 0)
@@ -3916,6 +3980,7 @@ class Overlay:
                 lab.setFont(self._font(en_size, False,
                                        lang_font(CURRENT_LANGS.get("tl", "en"), self.cfg) or "Segoe UI"))
                 lab.setStyleSheet("color:%s;background:transparent;" % col)
+                lab.setAlignment(_halign)
                 lab.setFixedHeight(self._text_height(lab, inner))
                 lab.setProperty("sentence", en)
                 lab.setProperty("zh", zh)
@@ -3936,6 +4001,7 @@ class Overlay:
                     z.setWordWrap(True)
                     z.setFont(self._font(zh_size, False, "Microsoft YaHei"))
                     z.setStyleSheet("color:%s;background:transparent;" % zh_col)
+                    z.setAlignment(_halign)
                     z.setTextInteractionFlags(_Qt.NoTextInteraction)
                     z.setFixedHeight(min(self._text_height(z, inner), int(zh_size * 2.4)))
                     zh_h = z.height() + 1
@@ -3949,12 +4015,12 @@ class Overlay:
             log("滚动字幕渲染失败：" + repr(e))
 
     @staticmethod
-    def _dim(hex_color, strength):
-        """把颜色往深色调，做旧句用（越旧越暗）。"""
+    def _dim(hex_color, strength, light=False):
+        """把颜色往背景色方向调，做旧句用（越旧越暗 / 浅色皮肤上越旧越淡）。"""
         try:
             h = hex_color.lstrip("#")
             r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-            base = (34, 32, 30)
+            base = (250, 248, 244) if light else (34, 32, 30)
             return "#%02X%02X%02X" % tuple(
                 int(base[i] + (v - base[i]) * strength) for i, v in enumerate((r, g, b)))
         except Exception:
@@ -5353,6 +5419,9 @@ class Overlay:
             if save:
                 self._remember_geometry()
                 save_config(self.cfg)
+            log("字幕条几何：%dx%d @%d,%d（%s/%s）" % (
+                self.win.width(), self.win.height(), self.win.x(), self.win.y(),
+                preset, str(self.cfg.get("overlay_style"))))
         except Exception as e:
             log("摆放字幕条失败：" + repr(e))
 
@@ -5465,8 +5534,9 @@ class Overlay:
         if not use:
             self.spk_label.setText("")
             self.spk_label.setVisible(False)
-            self.dst_label.setStyleSheet("color:#FFFFFF;")
-            self._hl_color = "#FFFFFF"
+            _k2, _sk2 = skin_of(self.cfg)
+            self.dst_label.setStyleSheet("color:%s;" % _sk2["main"])
+            self._hl_color = _sk2["main"]
             return
         color = spk_color(spk)
         self._hl_color = color
@@ -5622,6 +5692,7 @@ class Overlay:
             self._hist_idle.start(sec * 1000)
         except Exception:
             pass
+        self._apply_skin()
         self._fit_height()
         lag_txt = ""
         try:
@@ -5718,6 +5789,19 @@ class Overlay:
         except Exception as e:
             log("抓手同步失败：" + repr(e))
 
+    def _apply_skin(self):
+        """把皮肤的副行颜色、对齐方式应用到当前句（主体颜色由说话人色/皮肤主色决定）。"""
+        _k, sk = skin_of(self.cfg)
+        al = self.Qt.AlignHCenter if sk.get("align") == "center" else self.Qt.AlignLeft
+        try:
+            self.src_label.setStyleSheet("color:%s;" % sk["sub"])
+            self.src_label.setAlignment(al)
+            self.dst_label.setAlignment(al)
+            self.status.setStyleSheet("color:%s;" % sk["sub"])
+            self.dot.setStyleSheet("color:%s;font-size:9px;" % sk["sub"])
+        except Exception:
+            pass
+
     def _has_text(self):
         """当前句有没有内容：有就展开成对话框高度，没有就收成状态栏。"""
         try:
@@ -5763,8 +5847,7 @@ class Overlay:
                 if self._has_text() or self.hist_box.isVisibleTo(self.win):
                     h = self._dialog_h()
                 else:
-                    # 空闲态（静音 / 刚启动还没有句子）收成一条状态栏：195px 的空框
-                    # 等于白挡游戏画面，收窄后只留 92px，上沿不动所以不跳。
+                    # 空闲态（静音 / 刚启动还没有句子）收成一条窄框，不白占一块画面
                     h = 92
             else:
                 h = max(118, min(420, h))
@@ -5802,7 +5885,8 @@ class Overlay:
         self._sync_handle()
 
     def _glass(self, value=None):
-        """只有卡片底色带透明度；文字、按钮字、色条全都保持不透明，拖到多淡文字都清晰。"""
+        """只有卡片底色带透明度；文字、按钮字、色条全都保持不透明，拖到多淡文字都清晰。
+        底色 / 描边 / 圆角由 overlay_skin 决定：换皮肤只换外观，不动任何流水线逻辑。"""
         try:
             a = float(self.cfg.get("opacity") if value is None else value)
         except Exception:
@@ -5810,21 +5894,54 @@ class Overlay:
         a = max(0.15, min(1.0, a))
         bg = int(round(a * 255))
         line = int(round(min(1.0, a + 0.1) * 255))          # 描边比底色稍微实一点，淡的时候还看得出边界
+        _key, skin = skin_of(self.cfg)
+        edge_alpha = skin.get("edge_alpha")
+        if edge_alpha is None:
+            edge_alpha = line
         if getattr(self, "_interactive", False):
             # 交互模式：整圈描边换成低饱和的淡绿，提示"这层现在能点"
-            edge = "border:1px solid rgba(150,196,170,150);border-left:3px solid #3B82F6;"
+            edge = "border:1px solid rgba(150,196,170,120);"
+        elif skin.get("edge") is None or edge_alpha <= 0:
+            edge = "border:none;"
         else:
-            edge = "border:1px solid rgba(255,255,255,%d);border-left:3px solid #3B82F6;" % line
+            e = skin["edge"]
+            edge = "border:1px solid rgba(%d,%d,%d,%d);" % (
+                e[0], e[1], e[2], min(255, int(edge_alpha)))
+        if skin.get("bg") is None:
+            background = "background:transparent;"
+        elif skin.get("grad"):
+            # 歌词 / 电影字幕：上下淡出的软底，浅色壁纸上字也读得清，但不至于压成一块黑板
+            b = skin["bg"]
+            # 软底只垫到“能读清”的程度：太黑就成了黑板，压住游戏画面
+            a1 = min(bg, 150)
+            a0 = int(a1 * 0.4)
+            background = ("background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+                          "stop:0 rgba(%d,%d,%d,%d),stop:0.42 rgba(%d,%d,%d,%d),"
+                          "stop:0.58 rgba(%d,%d,%d,%d),stop:1 rgba(%d,%d,%d,%d));"
+                          % (b[0], b[1], b[2], a0, b[0], b[1], b[2], a1,
+                             b[0], b[1], b[2], a1, b[0], b[1], b[2], a0))
+        else:
+            b = skin["bg"]
+            background = "background:rgba(%d,%d,%d,%d);" % (b[0], b[1], b[2], bg)
+        # 浅色皮肤上按钮也得换成深字浅底，否则白底白字直接看不见
+        light = sum(skin["bg"]) / 3.0 > 150 if skin.get("bg") else False
+        if light:
+            btn = ("QPushButton{background:rgba(30,30,36,10);border:1px solid rgba(30,30,36,28);"
+                   "border-radius:9px;color:#4A4A50;font-size:11px;padding:2px 11px;}"
+                   "QPushButton:hover{background:rgba(30,30,36,26);color:#111114;}"
+                   "QPushButton:pressed{background:rgba(30,30,36,40);}")
+        else:
+            btn = ("QPushButton{background:rgba(255,255,255,14);border:1px solid rgba(255,255,255,24);"
+                   "border-radius:9px;color:#C6C1B9;font-size:11px;padding:2px 11px;}"
+                   "QPushButton:hover{background:rgba(255,255,255,42);color:#FFFFFF;}"
+                   "QPushButton:pressed{background:rgba(255,255,255,66);}")
         self.panel.setStyleSheet(
-            "#panel{background:rgba(16,18,22,%d);%s"
-            "border-radius:14px;}"
+            "#panel{%s%sborder-radius:%dpx;}"
             "QLabel{background:transparent;}"
-            "QPushButton{background:rgba(255,255,255,14);border:1px solid rgba(255,255,255,24);"
-            "border-radius:9px;color:#C6C1B9;font-size:11px;padding:2px 11px;}"
-            "QPushButton:hover{background:rgba(255,255,255,42);color:#FFFFFF;}"
-            "QPushButton:pressed{background:rgba(255,255,255,66);}"
+            "%s"
             "QPushButton#quit:hover{background:rgba(194,112,61,58);color:#F2BA95;"
-            "border-color:rgba(242,186,149,96);}" % (bg, edge)
+            "border-color:rgba(242,186,149,96);}"
+            % (background, edge, int(skin.get("radius") or 14), btn)
         )
 
     def preview_opacity(self, value):
@@ -5833,6 +5950,7 @@ class Overlay:
 
     def update_look(self):
         self._glass()
+        self._apply_skin()
         self.src_label.setVisible(bool(self.cfg.get("show_source"))
                                   and not bool(self.cfg.get("overlay_bilingual", False)))
         self.dst_label.setFont(self._font(int(self.cfg.get("font_size") or 22), True, lang_font(CURRENT_LANGS.get("tl", "en"), self.cfg) or "Segoe UI", 0.2))
@@ -6428,6 +6546,33 @@ def build_settings(owner):
         except Exception:
             pass
     gap_spin.valueChanged.connect(lambda v: _preview_gap(int(v)))
+
+    row3d = QHBoxLayout()
+    row3d.addWidget(QLabel("字幕皮肤"))
+    skin_box = QComboBox()
+    for _k, _v in OVERLAY_SKINS.items():
+        skin_box.addItem(_v.get("name") or _k, _k)
+    _cur_sk = str(cfg.get("overlay_skin") or "dialog_dark")
+    for i in range(skin_box.count()):
+        if skin_box.itemData(i) == _cur_sk:
+            skin_box.setCurrentIndex(i)
+    skin_box.setToolTip("只换外观：底色 / 描边 / 圆角 / 文字颜色与对齐；"
+                        "采集、翻译、历史行数这些逻辑都不受影响")
+    row3d.addWidget(skin_box, 1)
+    root.addLayout(row3d)
+
+    def _preview_skin():
+        k = str(skin_box.currentData() or "dialog_dark")
+        cfg["overlay_skin"] = k
+        try:
+            owner.overlay.cfg["overlay_skin"] = k
+            owner.overlay.update_look()
+            owner.overlay._render_history()
+            owner.overlay._fit_height()
+        except Exception as e:
+            log("切换字幕皮肤失败：" + repr(e))
+        save_config(cfg)
+    skin_box.currentIndexChanged.connect(lambda _i: _preview_skin())
     pos_hint = QLabel("默认底部居中、离任务栏 72px；交互模式下拖动字幕条，靠近中线 / 底部会自动吸附，松手记住。")
     pos_hint.setStyleSheet("color:#8C8781;font-size:11px;")
     pos_hint.setWordWrap(True)
@@ -8334,7 +8479,7 @@ class MainWindow:
 
         ctl = QHBoxLayout()
         ctl.setSpacing(8)
-        self.btn_capture = QPushButton("暂停捕获")
+        self.btn_capture = QPushButton("开始捕获")
         self.btn_capture.setObjectName("primary")
         self.btn_capture.setCursor(Qt.PointingHandCursor)
         self.btn_capture.setFixedHeight(34)
@@ -8368,6 +8513,59 @@ class MainWindow:
         ctl.addWidget(self.chk_overlay)
         ctl.addWidget(self.btn_hist_toggle)
         rv.addLayout(ctl)
+
+        # ---- 外观快捷条：皮肤 / 位置 / 字号 / 快捷键，全部放在首页第一屏 ----
+        # 这些以前只埋在 Lab 里，用户得先知道「实验室」在哪才找得到；挪到首页后不用翻菜单。
+        look = QHBoxLayout()
+        look.setSpacing(8)
+        look.addWidget(QLabel("字幕皮肤"))
+        self.ov_skin = QComboBox()
+        for _k, _v in OVERLAY_SKINS.items():
+            self.ov_skin.addItem(_v.get("name") or _k, _k)
+        _cur_sk = str(cfg.get("overlay_skin") or "dialog_dark")
+        for _i in range(self.ov_skin.count()):
+            if self.ov_skin.itemData(_i) == _cur_sk:
+                self.ov_skin.setCurrentIndex(_i)
+        self.ov_skin.setMinimumWidth(190)
+        self.ov_skin.setToolTip("换字幕框的外观：底色 / 描边 / 圆角 / 文字颜色，立即生效")
+        self.ov_skin.currentIndexChanged.connect(self._on_skin_chip)
+        look.addWidget(self.ov_skin)
+
+        self.ov_pos = QComboBox()
+        for _t, _v in (("顶部", "top"), ("底部", "bottom"),
+                       ("底部偏上", "bottom_high"), ("自由位置", "free")):
+            self.ov_pos.addItem(_t, _v)
+        _cur_pos = str(cfg.get("overlay_pos") or "top")
+        for _i in range(self.ov_pos.count()):
+            if self.ov_pos.itemData(_i) == _cur_pos:
+                self.ov_pos.setCurrentIndex(_i)
+        self.ov_pos.setToolTip("字幕条贴在屏幕哪里")
+        self.ov_pos.currentIndexChanged.connect(self._on_pos_chip)
+        look.addWidget(self.ov_pos)
+
+        self.btn_fs_down = QPushButton("A−")
+        self.btn_fs_down.setFixedHeight(28)
+        self.btn_fs_down.setFixedWidth(40)
+        self.btn_fs_down.setToolTip("字幕字号减一档")
+        self.btn_fs_down.clicked.connect(lambda: self._font_step(-1))
+        look.addWidget(self.btn_fs_down)
+        self.lbl_fs = QLabel("字号 %d" % int(cfg.get("font_size") or 22))
+        self.lbl_fs.setObjectName("hint")
+        look.addWidget(self.lbl_fs)
+        self.btn_fs_up = QPushButton("A+")
+        self.btn_fs_up.setFixedHeight(28)
+        self.btn_fs_up.setFixedWidth(40)
+        self.btn_fs_up.setToolTip("字幕字号加一档")
+        self.btn_fs_up.clicked.connect(lambda: self._font_step(1))
+        look.addWidget(self.btn_fs_up)
+
+        self.btn_keys_quick = QPushButton("快捷键一览")
+        self.btn_keys_quick.setFixedHeight(28)
+        self.btn_keys_quick.setToolTip("所有键位都在这里，底部能直接改")
+        self.btn_keys_quick.clicked.connect(lambda: pop_hotkey_sheet(self.owner))
+        look.addWidget(self.btn_keys_quick)
+        look.addStretch(1)
+        rv.addLayout(look)
 
         # ---- 历史抽屉默认收起；空出来的位置放最近三句，避免一屏空白 ----
         self.btn_hist_toggle.clicked.connect(self._toggle_hist_drawer)
@@ -10025,6 +10223,42 @@ class MainWindow:
         except Exception as e:
             log("切换捕获失败：" + repr(e))
         self._sync_capture_ui()
+
+    def _on_skin_chip(self):
+        try:
+            k = str(self.ov_skin.currentData() or "dialog_dark")
+            self.cfg["overlay_skin"] = k
+            ov = self.owner.overlay
+            ov.cfg["overlay_skin"] = k
+            ov.update_look()
+            ov._render_history()
+            ov._fit_height()
+            save_config(self.cfg)
+            self.set_status("字幕皮肤：" + (OVERLAY_SKINS.get(k) or {}).get("name", k), "ok")
+        except Exception as e:
+            log("切换字幕皮肤失败：" + repr(e))
+
+    def _on_pos_chip(self):
+        try:
+            p = str(self.ov_pos.currentData() or "top")
+            self.cfg["overlay_pos"] = p
+            self.owner.overlay.apply_position(preset=p, save=True)
+            self.set_status("字幕位置：" + str(self.ov_pos.currentText()), "ok")
+        except Exception as e:
+            log("切换字幕位置失败：" + repr(e))
+
+    def _font_step(self, step):
+        try:
+            fs = int(self.cfg.get("font_size") or 22)
+            fs = max(14, min(48, fs + int(step) * 2))
+            self.cfg["font_size"] = fs
+            self.lbl_fs.setText("字号 %d" % fs)
+            self.owner.overlay.cfg["font_size"] = fs
+            self.owner.overlay.update_look()
+            self.owner.overlay._fit_height()
+            save_config(self.cfg)
+        except Exception as e:
+            log("调整字幕字号失败：" + repr(e))
 
     def _toggle_hist_drawer(self):
         vis = self.hist_box.isHidden()
@@ -12817,7 +13051,9 @@ class App:
                 self.main.chip_trans.setText("翻译：加载失败")
         self.ui_q.put(("state", msg, tone))
         self.main.set_status(msg, tone)
-        if kind == "ready" and not self.paused:
+        if kind == "ready" and not self.paused and bool(self.cfg.get("auto_start_capture", False)):
+            # 默认不自动开录：按钮的「开始捕获」必须是用户点了才真的开始，
+            # 否则按钮文案落在「开始」而引擎已在收听，第一次点击就变成了暂停。
             self.start_capture()
             self.start_mic()
 
@@ -12843,6 +13079,10 @@ class App:
         self.capture.start()
         try:
             self.overlay.btn_pause.setText("暂停")
+        except Exception:
+            pass
+        try:
+            self.main._sync_capture_ui()
         except Exception:
             pass
 
@@ -12892,6 +13132,10 @@ class App:
             self.capture = None
         try:
             self.overlay.btn_pause.setText("开始")
+        except Exception:
+            pass
+        try:
+            self.main._sync_capture_ui()
         except Exception:
             pass
 
