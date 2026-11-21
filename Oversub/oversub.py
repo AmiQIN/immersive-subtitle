@@ -3781,6 +3781,11 @@ class Overlay:
         self._hot_timer.timeout.connect(self._hot_check)
         self._hot_timer.start()
         self._hot_on = False
+        # 每 0.7 秒瞄一眼任务栏：自动隐藏的任务栏弹出来会盖住字幕条下半截
+        self._tray_timer = QTimer(self.win)
+        self._tray_timer.setInterval(700)
+        self._tray_timer.timeout.connect(self._tray_poll)
+        self._tray_timer.start()
 
         # 交互模式事件：鼠标移到卡片上浮出 ☆；在字幕上划词/双击选词后弹小气泡
         from PySide6.QtCore import QObject
@@ -5516,9 +5521,33 @@ class Overlay:
         self.win.raise_()
 
     def _avail_rect(self):
+        """字幕条可以摆放的区域：优先用系统报的工作区，别压在任务栏下面。
+
+        Qt 在部分 Windows 11 机器上把 availableGeometry 报成整块屏幕（任务栏被
+        DWM 接管时不扣），照它摆放会让字幕条下半截连按钮一起被任务栏盖住。
+        这里取 Win32 的工作区与 Qt 可用区的交集，只在它确实更小时才采用。
+        坐标要按 devicePixelRatio 从物理像素换回 Qt 的逻辑像素。
+        """
         from PySide6.QtGui import QGuiApplication
+        from PySide6.QtCore import QRect
         scr = self.win.screen() or QGuiApplication.primaryScreen()
-        return scr.availableGeometry()
+        g = scr.availableGeometry()
+        try:
+            import ctypes
+            from ctypes import wintypes
+            r = wintypes.RECT()
+            # SPI_GETWORKAREA = 0x0030
+            if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):
+                dpr = float(scr.devicePixelRatio() or 1.0)
+                wr = QRect(int(r.left / dpr), int(r.top / dpr),
+                           int((r.right - r.left) / dpr),
+                           int((r.bottom - r.top) / dpr))
+                inter = g.intersected(wr)
+                if inter.isValid() and inter.height() < g.height():
+                    return inter
+        except Exception:
+            pass
+        return g
 
     def apply_position(self, preset=None, save=False):
         """按预设把字幕条摆好：默认底部居中，离任务栏留 72px，不贴着画面底边。"""
@@ -5561,6 +5590,7 @@ class Overlay:
                 else:
                     y = scr.bottom() - h - gap
                 self.win.move(x, y)
+            self._y_home = int(self.win.y())     # 用户期望的位置；被任务栏挡时只临时上移
             self._clamp_to_screen()
             self._sync_handle()
             if save:
@@ -5579,11 +5609,42 @@ class Overlay:
             w = max(1, self.win.width())
             h = max(1, self.win.height())
             x = min(max(scr.left(), self.win.x()), max(scr.left(), scr.right() - w))
-            y = min(max(scr.top(), self.win.y()), max(scr.top(), scr.bottom() - h))
+            home = int(getattr(self, "_y_home", self.win.y()))
+            limit = max(scr.top(), scr.bottom() - h)
+            tray = int(getattr(self, "_tray_top", 0) or 0)
+            if scr.top() < tray < scr.bottom():
+                # 任务栏已经弹出来了：整体让到它上面，缩回去后会自动落回 home
+                limit = min(limit, max(scr.top(), tray - h - 2))
+            y = min(max(scr.top(), home), limit)
             if (x, y) != (self.win.x(), self.win.y()):
                 self.win.move(x, y)
         except Exception as e:
             log("字幕条位置收敛失败：" + repr(e))
+
+    def _tray_poll(self):
+        """任务栏自动隐藏时工作区不缩小，但它一弹出来就压住字幕条：直接量任务栏窗口。"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            scr = self._avail_rect()
+            dpr = float(self.win.screen().devicePixelRatio() or 1.0)
+            top = 0
+            for cls in ("Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+                hwnd = ctypes.windll.user32.FindWindowW(cls, None)
+                if not hwnd:
+                    continue
+                r = wintypes.RECT()
+                if ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r)):
+                    t = int(r.top / dpr)
+                    if scr.top() < t < scr.bottom():
+                        top = max(top, t)
+            if top != int(getattr(self, "_tray_top", 0) or 0):
+                self._tray_top = top
+                self._clamp_to_screen()
+                log("任务栏%s，字幕条%s" % ("弹出" if top else "缩回",
+                                          "让位到 %d" % self.win.y() if top else "落回原位"))
+        except Exception:
+            pass
 
     def _remember_geometry(self):
         try:
