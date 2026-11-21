@@ -4070,8 +4070,10 @@ class Overlay:
                 v = QVBoxLayout(w)
                 v.setContentsMargins(0, 0, 0, 0)
                 v.setSpacing(1)
-                # 每行带序号：1 是最旧，数字越大越新，第一次看也知道往哪边读
-                lab = QLabel("%2d  %s" % (i + 1, en))
+                # 行首写口头坐标，不再打 1/2/3 数字：数字看不出哪条离当前句最近
+                back = n - i                    # 1 = 紧挨当前句的那条
+                tag = "上一句" if back == 1 else ("上上句" if back == 2 else "更早")
+                lab = QLabel("%s  %s" % (tag, en))
                 lab.setTextFormat(_Qt.PlainText)
                 lab.setWordWrap(True)
                 lab.setFont(self._font(en_size, False,
