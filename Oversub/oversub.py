@@ -6419,7 +6419,7 @@ def build_settings(owner, embedded=False):
     row = QHBoxLayout()
     row.addWidget(QLabel("界面字号"))
     size = QSpinBox()
-    size.setRange(11, 17)
+    size.setRange(11, 20)
     size.setToolTip("只改主界面文字大小。字幕字号会按句子长短自动变，不用手调")
     size.setValue(int(cfg.get("ui_font_size") or 13))
     row.addWidget(size)
@@ -8575,7 +8575,7 @@ class MainWindow:
         """只改主界面文字大小，不动悬浮字幕（字幕字号按句长自动算）。"""
         try:
             fs = int(self.cfg.get("ui_font_size") or 13)
-            fs = max(11, min(17, fs))
+            fs = max(11, min(20, fs))
             qss = theme_qss(str(self.cfg.get("theme") or "dark"))
             self.win.setStyleSheet(qss + "\nQWidget{font-size:%dpx;}" % fs)
             # 字号变了，导航文字要按新字号重新算省略号，不然会重新溢出
@@ -8584,8 +8584,30 @@ class MainWindow:
                     b.set_expanded(bool(getattr(self, "nav_expanded", True)))
                 except Exception:
                     pass
+            # 字号一调大，定宽小按钮里的「A− / A+」就被 QSS 内边距挤成一条竖线，跟着字体重算
+            self._fit_look_row()
         except Exception as e:
             log("应用界面字号失败：" + repr(e))
+
+    def _fit_look_row(self):
+        """外观快捷条里的字号步进按钮按当前字体算宽高。
+
+        按钮 QSS 左右各有 14px 内边距，写死 40px 在 13px 字号下就已经裁字，
+        字号一放大彻底变成一条竖线——这就是「界面字号」那一小段看着被遮挡的原因。
+        """
+        try:
+            fm = self.btn_fs_down.fontMetrics()
+            pad = 30
+            bw = max(40, fm.horizontalAdvance("A−") + pad)
+            bh = max(28, fm.height() + 14)
+            for b in (self.btn_fs_down, self.btn_fs_up):
+                b.setFixedWidth(bw)
+                b.setFixedHeight(bh)
+            fmk = self.btn_keys_quick.fontMetrics()
+            self.btn_keys_quick.setMinimumWidth(max(90, fmk.horizontalAdvance("快捷键一览") + pad))
+            self.btn_keys_quick.setFixedHeight(max(28, fmk.height() + 14))
+        except Exception as e:
+            log("调整字号按钮宽度失败：" + repr(e))
 
     def _start_geo_timer(self):
         try:
@@ -9051,8 +9073,6 @@ class MainWindow:
         look.addWidget(self.ov_pos)
 
         self.btn_fs_down = QPushButton("A−")
-        self.btn_fs_down.setFixedHeight(28)
-        self.btn_fs_down.setFixedWidth(40)
         self.btn_fs_down.setToolTip("主界面字号小一点")
         self.btn_fs_down.clicked.connect(lambda: self._font_step(-1))
         look.addWidget(self.btn_fs_down)
@@ -9060,17 +9080,15 @@ class MainWindow:
         self.lbl_fs.setObjectName("hint")
         look.addWidget(self.lbl_fs)
         self.btn_fs_up = QPushButton("A+")
-        self.btn_fs_up.setFixedHeight(28)
-        self.btn_fs_up.setFixedWidth(40)
         self.btn_fs_up.setToolTip("主界面字号大一点")
         self.btn_fs_up.clicked.connect(lambda: self._font_step(1))
         look.addWidget(self.btn_fs_up)
 
         self.btn_keys_quick = QPushButton("快捷键一览")
-        self.btn_keys_quick.setFixedHeight(28)
         self.btn_keys_quick.setToolTip("所有键位都在这里，底部能直接改")
         self.btn_keys_quick.clicked.connect(lambda: pop_hotkey_sheet(self.owner))
         look.addWidget(self.btn_keys_quick)
+        self._fit_look_row()
         look.addStretch(1)
         rv.addLayout(look)
 
@@ -10858,7 +10876,7 @@ class MainWindow:
         """只调主界面字号；字幕字号按句子长短自动变。"""
         try:
             fs = int(self.cfg.get("ui_font_size") or 13) + int(step)
-            fs = max(11, min(17, fs))
+            fs = max(11, min(20, fs))
             self.cfg["ui_font_size"] = fs
             self.lbl_fs.setText("界面字号 %d" % fs)
             self.apply_ui_font()
