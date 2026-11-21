@@ -192,6 +192,8 @@ DEFAULT_CONFIG = {
     "show_source": True,
     "font_size": 22,
     "overlay_prev_rows": 0,       # 字幕条里除当前句外还留几句历史；0 = 只显示当前句（对话框形态）
+    "overlay_idle_hide": True,    # 长时间没有新字幕就自动隐藏整条，别一直挡画面
+    "overlay_idle_sec": 15,       # 多久算「长时间」，秒
     "overlay_idle_hide": 8,       # 多久没有新句就把上一句淡出（秒）
     "opacity": 0.9,
     "window": {"x": 400, "y": 840, "w": 1000, "h": 120},
@@ -3786,6 +3788,13 @@ class Overlay:
         self._tray_timer.setInterval(700)
         self._tray_timer.timeout.connect(self._tray_poll)
         self._tray_timer.start()
+        # 闲置自动隐藏：一秒看一眼，太久没新字幕就把整条收起来
+        self._last_live = time.monotonic()
+        self._idle_hidden = False
+        self._idle_timer = QTimer(self.win)
+        self._idle_timer.setInterval(1000)
+        self._idle_timer.timeout.connect(self._idle_check)
+        self._idle_timer.start()
 
         # 交互模式事件：鼠标移到卡片上浮出 ☆；在字幕上划词/双击选词后弹小气泡
         from PySide6.QtCore import QObject
@@ -5570,12 +5579,8 @@ class Overlay:
                 win = self.cfg.get("window") or {}
                 x = int(win.get("x") or (scr.left() + (scr.width() - w) // 2))
                 y = int(win.get("y") or (scr.bottom() - h - gap))
-                if getattr(self, "_compact", False):
-                    # 收起成一条时保持底边不往上跳，免得操作条悬在半空
-                    try:
-                        y = y + int(win.get("h") or h) - h
-                    except Exception:
-                        pass
+                # 不再按旧高度补差：它在收合/展开之间会把 y 一路带歪，
+                # 底边对齐交给 _clamp_to_screen 统一处理
                 self.win.move(x, y)
             else:
                 x = scr.left() + (scr.width() - w) // 2
@@ -5624,6 +5629,9 @@ class Overlay:
     def _tray_poll(self):
         """任务栏自动隐藏时工作区不缩小，但它一弹出来就压住字幕条：直接量任务栏窗口。"""
         try:
+            if not self.win.isVisible():
+                return          # 字幕条本来就藏着，不用为它让位
+
             import ctypes
             from ctypes import wintypes
             scr = self._avail_rect()
@@ -5794,6 +5802,9 @@ class Overlay:
         if not str(en).strip():
             # 静音过滤：没识别出文字就不换行、不进缓冲、不留空行
             return
+        if getattr(self, "_idle_hidden", False):
+            self._wake_from_idle()
+        self._last_live = time.monotonic()
         zh_new = self._zh_next or ""
         if should_filter_short(zh_new, en, self.cfg):
             self._zh_next = ""
@@ -6067,6 +6078,67 @@ class Overlay:
                         or (self.dst_label.toPlainText() or "").strip())
         except Exception:
             return True
+
+    def _idle_check(self):
+        """一秒一下：太久没有新字幕就把整条隐掉；交互模式正在用，不动它。"""
+        try:
+            if not bool(self.cfg.get("overlay_idle_hide", True)):
+                return
+            if getattr(self, "_idle_hidden", False) or getattr(self, "_interactive", False):
+                return
+            if not self.win.isVisible():
+                return
+            try:
+                limit = float(self.cfg.get("overlay_idle_sec") or 15)
+            except Exception:
+                limit = 15.0
+            limit = max(4.0, limit)
+            if time.monotonic() - float(getattr(self, "_last_live", 0.0) or 0.0) < limit:
+                return
+            self._go_idle(limit)
+        except Exception:
+            pass
+
+    def _go_idle(self, limit=15.0):
+        try:
+            self._idle_hidden = True
+            self._pending = None
+            # 隐藏的同时把历史揉掉：下次开口只从新的一句开始，别把十几秒前的旧话端回来
+            self._hist = []
+            self._render_history()
+            self.hist_box.setVisible(False)
+            self.divider.setVisible(False)
+            self.win.hide()
+            log("闲置 %.0f 秒没有新字幕，字幕条已隐藏（历史一并清空）" % limit)
+        except Exception as e:
+            log("闲置隐藏失败：" + repr(e))
+
+    def _wake_from_idle(self):
+        """再开口：直接展开成完整对话框，历史从零开始。"""
+        try:
+            self._idle_hidden = False
+            self._hist = []
+            self._pending = None
+            self._render_history()
+            self.hist_box.setVisible(False)
+            self.divider.setVisible(False)
+            self._compact = False
+            for w in (self.spk_label, self.src_label, self.dst_label):
+                try:
+                    w.setVisible(True)
+                except Exception:
+                    pass
+            try:
+                self.src_label.setVisible(bool(self.cfg.get("show_source", True)))
+            except Exception:
+                pass
+            self.apply_position(save=False)
+            self.win.show()
+            self.win.raise_()
+            self._last_live = time.monotonic()
+            log("重新开口，字幕条已展开（历史从零开始）")
+        except Exception as e:
+            log("唤醒字幕条失败：" + repr(e))
 
     def set_compact(self, on):
         """没有字幕内容时，收成一条只有按钮的操作条；有句子进来再展开。"""
@@ -6821,6 +6893,21 @@ def build_settings(owner, embedded=False):
     row2.addStretch(1)
     root.addLayout(row2)
 
+    row2b = QHBoxLayout()
+    chk_idle = QCheckBox("太久没有新字幕就自动藏起来")
+    chk_idle.setChecked(bool(cfg.get("overlay_idle_hide", True)))
+    chk_idle.setToolTip("藏起来以后，你再说话它会自己回来，并且不带上之前的旧句")
+    row2b.addWidget(chk_idle)
+    idle_sec = QSpinBox()
+    idle_sec.setRange(4, 120)
+    idle_sec.setSuffix(" 秒")
+    idle_sec.setValue(int(cfg.get("overlay_idle_sec") or 15))
+    idle_sec.setToolTip("安静超过这么久就藏；4–120 秒之间随便调")
+    row2b.addWidget(idle_sec)
+    row2b.addWidget(QLabel("没声音就算安静"))
+    row2b.addStretch(1)
+    root.addLayout(row2b)
+
     def _preview_prev(v):
         try:
             owner.overlay.cfg["overlay_prev_rows"] = int(v)
@@ -7480,6 +7567,8 @@ def build_settings(owner, embedded=False):
         except Exception:
             pass
         cfg["overlay_prev_rows"] = int(prev_n.value())
+        cfg["overlay_idle_hide"] = bool(chk_idle.isChecked())
+        cfg["overlay_idle_sec"] = int(idle_sec.value())
         cfg["opacity"] = float(alpha.value())
         cfg["show_source"] = bool(chk_src.isChecked())
         cfg["overlay_bilingual"] = bool(chk_bilingual.isChecked())
