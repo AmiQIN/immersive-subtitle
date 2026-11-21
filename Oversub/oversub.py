@@ -6413,33 +6413,376 @@ def build_settings(owner, embedded=False):
         except Exception:
             pass
 
-    head("怎么翻译")
+    head("字幕长什么样")
     row = QHBoxLayout()
-    rb_local = QRadioButton("本地离线（免费，翻得生硬些）")
-    rb_online = QRadioButton("在线模型（需 key，接近人话）")
-    grp = QButtonGroup(dlg)
-    grp.addButton(rb_local)
-    grp.addButton(rb_online)
-    (rb_local if cfg.get("engine") != "online" else rb_online).setChecked(True)
-    row.addWidget(rb_local)
-    row.addWidget(rb_online)
+    row.addWidget(QLabel("界面字号"))
+    size = QSpinBox()
+    size.setRange(11, 17)
+    size.setToolTip("只改主界面文字大小。字幕字号会按句子长短自动变，不用手调")
+    size.setValue(int(cfg.get("ui_font_size") or 13))
+    row.addWidget(size)
+    row.addSpacing(18)
+    row.addWidget(QLabel("背景不透明度"))
+    alpha = QDoubleSpinBox()
+    alpha.setRange(0.15, 1.0)
+    alpha.setSingleStep(0.02)
+    alpha.setValue(float(cfg.get("opacity") or 0.9))
+    # 拖动/改数就立刻作用到字幕条上，不用等保存；文字始终不透明
+    alpha.valueChanged.connect(lambda v: owner.overlay.preview_opacity(float(v)))
+    size.valueChanged.connect(lambda v: _preview_font(int(v)))
+    row.addWidget(alpha)
     row.addStretch(1)
     root.addLayout(row)
 
-    grid = QGridLayout()
-    grid.setColumnStretch(1, 1)
-    edits = {}
-    for i, (key, label, ph) in enumerate((
-            ("base_url", "接口地址", "https://api.deepseek.com/v1"),
-            ("model", "模型名", "deepseek-chat"),
-            ("api_key", "API Key", "sk-…"))):
-        lb = QLabel(label)
-        e = QLineEdit(str(cfg.get(key) or ""))
-        e.setPlaceholderText(ph)
-        grid.addWidget(lb, i, 0)
-        grid.addWidget(e, i, 1)
-        edits[key] = e
-    root.addLayout(grid)
+    row2 = QHBoxLayout()
+    row2.addWidget(QLabel("字幕条上一句"))
+    prev_n = QSpinBox()
+    prev_n.setRange(0, 3)
+    prev_n.setValue(int(cfg.get("overlay_prev_rows", 2)))
+    prev_n.setToolTip("字幕条里除当前句外还留几句；0 = 只显示当前句，不挡视野")
+    row2.addWidget(prev_n)
+    row2.addWidget(QLabel("句（0 只留当前句，最多 3 句）"))
+    row2.addStretch(1)
+    root.addLayout(row2)
+
+    row2b = QHBoxLayout()
+    chk_idle = QCheckBox("太久没有新字幕就自动藏起来")
+    chk_idle.setChecked(bool(cfg.get("overlay_idle_hide", True)))
+    chk_idle.setToolTip("藏起来以后，你再说话它会自己回来，并且不带上之前的旧句")
+    row2b.addWidget(chk_idle)
+    idle_sec = QSpinBox()
+    idle_sec.setRange(4, 120)
+    idle_sec.setSuffix(" 秒")
+    idle_sec.setValue(int(cfg.get("overlay_idle_sec") or 15))
+    idle_sec.setToolTip("安静超过这么久就藏；4–120 秒之间随便调")
+    row2b.addWidget(idle_sec)
+    row2b.addWidget(QLabel("没声音就算安静"))
+    row2b.addStretch(1)
+    root.addLayout(row2b)
+
+    def _preview_prev(v):
+        try:
+            owner.overlay.cfg["overlay_prev_rows"] = int(v)
+            owner.overlay._render_history()
+            owner.overlay._fit_height()
+        except Exception:
+            pass
+    prev_n.valueChanged.connect(lambda v: _preview_prev(int(v)))
+
+    row3 = QHBoxLayout()
+    row3.addWidget(QLabel("字幕位置"))
+    pos_box = QComboBox()
+    for label, key in (("底部居中（默认）", "bottom"),
+                       ("底部偏上", "bottom_high"),
+                       ("顶部居中", "top"),
+                       ("自由位置（拖动后记住）", "free")):
+        pos_box.addItem(label, key)
+    try:
+        idx = max(0, [pos_box.itemData(i) for i in range(pos_box.count())]
+                  .index(str(cfg.get("overlay_pos") or "bottom")))
+        pos_box.setCurrentIndex(idx)
+    except Exception:
+        pos_box.setCurrentIndex(0)
+    pos_box.setMinimumWidth(190)
+    row3.addWidget(pos_box)
+    btn_reset_pos = QPushButton("复位到屏幕顶部")
+    btn_reset_pos.setObjectName("ghost")
+    btn_reset_pos.setCursor(Qt.PointingHandCursor)
+    btn_reset_pos.setToolTip("字幕条拖出屏幕、或换了显示器后一键找回")
+    row3.addWidget(btn_reset_pos)
+    row3.addStretch(1)
+    root.addLayout(row3)
+
+    def _reset_pos():
+        try:
+            owner.overlay.cfg["overlay_pos"] = "top"
+            owner.overlay.cfg.pop("window", None)
+            cfg["overlay_pos"] = "top"
+            cfg.pop("window", None)
+            owner.overlay.apply_position(save=True)
+            owner.overlay._fit_height()
+            try:
+                pos_box.setCurrentIndex(2)
+            except Exception:
+                pass
+            save_config(cfg)
+        except Exception as e:
+            log("复位字幕条位置失败：" + repr(e))
+    btn_reset_pos.clicked.connect(_reset_pos)
+
+    def _preview_pos():
+        try:
+            owner.overlay.cfg["overlay_pos"] = str(pos_box.currentData() or "bottom")
+            owner.overlay.apply_position()
+        except Exception:
+            pass
+    pos_box.currentIndexChanged.connect(lambda _i: _preview_pos())
+
+    row3b = QHBoxLayout()
+    row3b.addWidget(QLabel("字幕形态"))
+    sty_box = QComboBox()
+    sty_box.addItem("对话框（高度固定，推荐）", "dialog")
+    sty_box.addItem("字幕条（高度随内容伸缩）", "banner")
+    sty_box.setCurrentIndex(
+        1 if str(cfg.get("overlay_style") or "dialog") == "banner" else 0)
+    sty_box.setMinimumWidth(190)
+    row3b.addWidget(sty_box)
+    row3b.addStretch(1)
+    root.addLayout(row3b)
+
+    def _preview_style():
+        try:
+            owner.overlay.cfg["overlay_style"] = str(sty_box.currentData() or "dialog")
+            owner.overlay.apply_position()
+            owner.overlay._fit_height()
+        except Exception:
+            pass
+    sty_box.currentIndexChanged.connect(lambda _i: _preview_style())
+
+    row3c = QHBoxLayout()
+    row3c.addWidget(QLabel("顶部留白"))
+    gap_spin = QSpinBox()
+    gap_spin.setRange(0, 200)
+    gap_spin.setSingleStep(4)
+    gap_spin.setSuffix(" px")
+    try:
+        gap_spin.setValue(int(cfg.get("overlay_gap_top") or 8))
+    except Exception:
+        gap_spin.setValue(8)
+    gap_spin.setToolTip("顶部锚定时离屏幕上沿的距离；游戏顶部有血条 / 任务条时往下压 30–60px")
+    row3c.addWidget(gap_spin)
+    tail_hint = QLabel("只影响顶部锚定，拖动实时生效")
+    tail_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    row3c.addWidget(tail_hint)
+    row3c.addStretch(1)
+    root.addLayout(row3c)
+
+    def _preview_gap(v):
+        try:
+            cfg["overlay_gap_top"] = int(v)
+            owner.overlay.cfg["overlay_gap_top"] = int(v)
+            owner.overlay.apply_position(save=True)
+        except Exception:
+            pass
+    gap_spin.valueChanged.connect(lambda v: _preview_gap(int(v)))
+
+    row3d = QHBoxLayout()
+    row3d.addWidget(QLabel("字幕皮肤"))
+    skin_box = QComboBox()
+    for _k, _v in OVERLAY_SKINS.items():
+        skin_box.addItem(_v.get("name") or _k, _k)
+    _cur_sk = str(cfg.get("overlay_skin") or "dialog_dark")
+    for i in range(skin_box.count()):
+        if skin_box.itemData(i) == _cur_sk:
+            skin_box.setCurrentIndex(i)
+    skin_box.setToolTip("只换外观：底色 / 描边 / 圆角 / 文字颜色与对齐；"
+                        "采集、翻译、历史行数这些逻辑都不受影响")
+    row3d.addWidget(skin_box, 1)
+    root.addLayout(row3d)
+
+    def _preview_skin():
+        k = str(skin_box.currentData() or "dialog_dark")
+        cfg["overlay_skin"] = k
+        try:
+            owner.overlay.cfg["overlay_skin"] = k
+            owner.overlay.update_look()
+            owner.overlay._render_history()
+            owner.overlay._fit_height()
+        except Exception as e:
+            log("切换字幕皮肤失败：" + repr(e))
+        save_config(cfg)
+    skin_box.currentIndexChanged.connect(lambda _i: _preview_skin())
+    pos_hint = QLabel("默认底部居中、离任务栏 72px；交互模式下拖动字幕条，靠近中线 / 底部会自动吸附，松手记住。")
+    pos_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    pos_hint.setWordWrap(True)
+    root.addWidget(pos_hint)
+    size_hint = QLabel("字号也能不进设置直接调：Ctrl+Alt+= 放大 / Ctrl+Alt+- 缩小；"
+                       "交互模式下 Ctrl+滚轮，或字幕条上的 A− / A+。")
+    size_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    size_hint.setWordWrap(True)
+    root.addWidget(size_hint)
+
+    chk_src = QCheckBox("同时显示中文原文")
+    chk_src.setChecked(bool(cfg.get("show_source")))
+    root.addWidget(chk_src)
+
+    chk_bilingual = QCheckBox("对照模式：悬浮条并排显示「中文 ｜ 英文」（更短，默认关）")
+    chk_bilingual.setChecked(bool(cfg.get("overlay_bilingual", False)))
+    root.addWidget(chk_bilingual)
+    bil_hint = QLabel("开着的时候中文和英文挤在同一行，卡片不会多长一行；关掉就是纯英文沉浸。")
+    bil_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    root.addWidget(bil_hint)
+
+    head("听声音（识别）")
+    row = QHBoxLayout()
+    row.addWidget(QLabel("识别模型（ASR）"))
+    model_box = QComboBox()
+    model_box.addItem("自动（有显卡 medium，无显卡 small）", "auto")
+    model_box.addItem("中文 - base（最快，精度最低）", "base")
+    model_box.addItem("中文 - small（速度优先）", "small")
+    model_box.addItem("中文 - medium（高精度，显卡推荐）", "medium")
+    model_box.addItem("中文 - turbo（速度优先，长句稍弱）", "turbo")
+    cur_model = str(cfg.get("whisper_model") or "auto")
+    for i in range(model_box.count()):
+        if model_box.itemData(i) == cur_model:
+            model_box.setCurrentIndex(i)
+    model_box.setToolTip("当前 ASR 固定抓中文；以后放开源语言时，这里跟着语种注册表走")
+    row.addWidget(model_box, 1)
+    row.addSpacing(12)
+    row.addWidget(QLabel("翻译目标语种"))
+    cur_tl_label = QLabel(lang_name(cfg.get("target_lang") or "en"))
+    cur_tl_label.setStyleSheet("font-weight:600;color:#10B981;")
+    row.addWidget(cur_tl_label)
+    row.addStretch(1)
+    root.addLayout(row)
+    row = QHBoxLayout()
+    row.addWidget(QLabel("精度"))
+    asr_box = QComboBox()
+    asr_box.addItems(["准确优先（beam5 + 静音过滤，稍慢）", "速度优先（原来那样，最快）"])
+    asr_box.setCurrentIndex(0 if str(cfg.get("asr_quality") or "accurate") == "accurate" else 1)
+    row.addWidget(asr_box, 1)
+    root.addLayout(row)
+    row = QHBoxLayout()
+    row.addWidget(QLabel("响应速度"))
+    lat_box = QComboBox()
+    lat_box.addItem("快速（语音最长 3.2 秒，0.2 秒断句）", "fast")
+    lat_box.addItem("均衡（语音最长 4.2 秒，0.4 秒断句，默认）", "balanced")
+    lat_box.addItem("准确（语音最长 5.5 秒，0.4 秒断句）", "accurate")
+    cur_lat = str(cfg.get("latency_mode") or "balanced")
+    for i in range(lat_box.count()):
+        if lat_box.itemData(i) == cur_lat:
+            lat_box.setCurrentIndex(i)
+    lat_box.setToolTip("越短越跟手，但一句话可能被切在两段；连麦短句多用快速")
+    row.addWidget(lat_box, 1)
+    root.addLayout(row)
+    row = QHBoxLayout()
+    row.addWidget(QLabel("自定义热词"))
+    hot_box = QLineEdit(str(cfg.get("hotwords_custom") or ""))
+    hot_box.setPlaceholderText("常被听错的词，空格分隔，例如：萝莉 御姐 抽卡 老陈")
+    hot_box.setToolTip("只在「热词模式」不是关闭时生效，只在本机处理，不上传")
+    row.addWidget(hot_box, 1)
+    root.addLayout(row)
+    row = QHBoxLayout()
+    row.addWidget(QLabel("热词模式"))
+    hw_box = QComboBox()
+    hw_box.addItem("只用手填的词（推荐）", "custom")
+    hw_box.addItem("只用内置词表 + 手填", "full")
+    hw_box.addItem("关闭热词", "off")
+    cur_hw = str(cfg.get("asr_hotwords_mode") or "custom")
+    for i in range(hw_box.count()):
+        if hw_box.itemData(i) == cur_hw:
+            hw_box.setCurrentIndex(i)
+    hw_box.setToolTip("热词会当成提示词喂给模型：静音或听不清时，模型可能照着词表“念”出你没说的设定词。"
+                      "默认只用手填的词；出现“没说话却打出设定词”就切到关闭")
+    row.addWidget(hw_box, 1)
+    root.addLayout(row)
+    def _preview_hw():
+        cfg["asr_hotwords_mode"] = str(hw_box.currentData() or "custom")
+        save_config(cfg)
+    hw_box.currentIndexChanged.connect(lambda _i: _preview_hw())
+    asr_hint = QLabel("想让识别更准：先选「准确优先」；口音重就把模型换成 medium 或 turbo（首次使用会自动下载约 1.5G，CPU 上更慢）。")
+    asr_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    asr_hint.setWordWrap(True)
+    root.addWidget(asr_hint)
+
+    # 离线模型管理：尺寸特点、缓存状态、按需下载；翻译模型的状态也在这里看
+    mm = QHBoxLayout()
+    model_desc = QLabel("")
+    model_desc.setStyleSheet("color:#5E5A52;font-size:11px;")
+    model_desc.setWordWrap(True)
+    mm.addWidget(model_desc, 1)
+
+    def _cache_text(name):
+        hit = asr_model_cached(name)
+        return "%s：%s（约 %dMB）· %s" % (
+            name, ASR_SIZES.get(name, {}).get("desc", ""), ASR_SIZES.get(name, {}).get("mb", 0),
+            "已下载" if hit else "未下载")
+
+    def _update_model_desc(*_a):
+        mid = (model_box.currentData() or "auto")
+        if mid == "auto":
+            mid = default_asr_model()
+        model_desc.setText(_cache_text(mid))
+    model_box.currentIndexChanged.connect(_update_model_desc)
+    _update_model_desc()
+
+    btn_dl = QPushButton("下载这个模型")
+    btn_dl.setCursor(Qt.PointingHandCursor)
+    btn_dl.setFixedHeight(26)
+    mm.addWidget(btn_dl)
+    root.addLayout(mm)
+
+    tr_status = QLabel("离线翻译（Argos %s）：%s" % (
+        pair_label(CURRENT_LANGS.get("sl", "zh"), CURRENT_LANGS.get("tl", "en")),
+        "已安装" if argos_installed() else "首次使用会自动准备"))
+    tr_status.setStyleSheet("color:#5E5A52;font-size:11px;")
+    root.addWidget(tr_status)
+
+    dl_state = QLabel("")
+    dl_state.setStyleSheet("color:#5E5A52;font-size:11px;")
+    root.addWidget(dl_state)
+
+    def _download_model():
+        name = (model_box.currentData() or "auto")
+        if name == "auto":
+            name = default_asr_model()
+        if asr_model_cached(name):
+            dl_state.setText("%s 已经下载好了，切换后点「保存并应用」即可。" % name)
+            return
+        dl_state.setText("正在后台下载 %s（约 %dMB），完成后会写进运行日志。" % (
+            name, ASR_SIZES.get(name, {}).get("mb", 0)))
+
+        def work():
+            try:
+                from faster_whisper import WhisperModel
+                WhisperModel(name, device="cpu", compute_type="int8")
+                log("ASR 模型已下载：%s" % name)
+            except Exception as e:
+                log("ASR 模型下载失败：%s｜%r" % (name, e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    btn_dl.clicked.connect(_download_model)
+
+    row = QHBoxLayout()
+    chk_short = QCheckBox("过滤过短识别（单字 / 语气词不记录、不推字幕）")
+    chk_short.setChecked(bool(cfg.get("filter_short", True)))
+    row.addWidget(chk_short)
+    row.addSpacing(12)
+    row.addWidget(QLabel("最短"))
+    min_chars = QSpinBox()
+    min_chars.setRange(1, 8)
+    min_chars.setSuffix(" 字")
+    min_chars.setValue(int(cfg.get("min_chars") or 2))
+    row.addWidget(min_chars)
+    row.addSpacing(10)
+    row.addWidget(QLabel("按词语言"))
+    min_words = QSpinBox()
+    min_words.setRange(1, 10)
+    min_words.setSuffix(" 词")
+    min_words.setValue(int(cfg.get("min_words") or 2))
+    min_words.setToolTip("英/法/德等空格分词语种按单词计数，中日按字符计数，阈值各自独立")
+    row.addWidget(min_words)
+    row.addStretch(1)
+    root.addLayout(row)
+    short_hint = QLabel("「啊」「哦」「Yeah.」这类碎片会被丢掉，表格和字幕都不再被塞满；想全收就把勾去掉。")
+    short_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    short_hint.setWordWrap(True)
+    root.addWidget(short_hint)
+
+    row = QHBoxLayout()
+    row.addWidget(QLabel("回放设备"))
+    dev_box = QComboBox()
+    devices = owner.list_loopback()
+    dev_box.addItems(devices)
+    cur = cfg.get("loopback_device") or (devices[0] if devices else "")
+    if cur:
+        dev_box.setCurrentText(cur)
+    row.addWidget(dev_box, 1)
+    root.addLayout(row)
+    hint = QLabel("默认跟系统扬声器走；用耳机或虚拟声卡时在这里指定。")
+    hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    root.addWidget(hint)
 
     head("用什么语言")
     row = QHBoxLayout()
@@ -6690,376 +7033,194 @@ def build_settings(owner, embedded=False):
     btn_pkg_fill.clicked.connect(_fill_packages)
     btn_pkg_del.clicked.connect(_uninstall_selected)
 
-    head("听声音（识别）")
+    head("怎么翻译")
     row = QHBoxLayout()
-    row.addWidget(QLabel("识别模型（ASR）"))
-    model_box = QComboBox()
-    model_box.addItem("自动（有显卡 medium，无显卡 small）", "auto")
-    model_box.addItem("中文 - base（最快，精度最低）", "base")
-    model_box.addItem("中文 - small（速度优先）", "small")
-    model_box.addItem("中文 - medium（高精度，显卡推荐）", "medium")
-    model_box.addItem("中文 - turbo（速度优先，长句稍弱）", "turbo")
-    cur_model = str(cfg.get("whisper_model") or "auto")
-    for i in range(model_box.count()):
-        if model_box.itemData(i) == cur_model:
-            model_box.setCurrentIndex(i)
-    model_box.setToolTip("当前 ASR 固定抓中文；以后放开源语言时，这里跟着语种注册表走")
-    row.addWidget(model_box, 1)
-    row.addSpacing(12)
-    row.addWidget(QLabel("翻译目标语种"))
-    cur_tl_label = QLabel(lang_name(cfg.get("target_lang") or "en"))
-    cur_tl_label.setStyleSheet("font-weight:600;color:#10B981;")
-    row.addWidget(cur_tl_label)
+    rb_local = QRadioButton("本地离线（免费，翻得生硬些）")
+    rb_online = QRadioButton("在线模型（需 key，接近人话）")
+    grp = QButtonGroup(dlg)
+    grp.addButton(rb_local)
+    grp.addButton(rb_online)
+    (rb_local if cfg.get("engine") != "online" else rb_online).setChecked(True)
+    row.addWidget(rb_local)
+    row.addWidget(rb_online)
     row.addStretch(1)
     root.addLayout(row)
+
+    grid = QGridLayout()
+    grid.setColumnStretch(1, 1)
+    edits = {}
+    for i, (key, label, ph) in enumerate((
+            ("base_url", "接口地址", "https://api.deepseek.com/v1"),
+            ("model", "模型名", "deepseek-chat"),
+            ("api_key", "API Key", "sk-…"))):
+        lb = QLabel(label)
+        e = QLineEdit(str(cfg.get(key) or ""))
+        e.setPlaceholderText(ph)
+        grid.addWidget(lb, i, 0)
+        grid.addWidget(e, i, 1)
+        edits[key] = e
+    root.addLayout(grid)
+
+    head("朗读")
     row = QHBoxLayout()
-    row.addWidget(QLabel("精度"))
-    asr_box = QComboBox()
-    asr_box.addItems(["准确优先（beam5 + 静音过滤，稍慢）", "速度优先（原来那样，最快）"])
-    asr_box.setCurrentIndex(0 if str(cfg.get("asr_quality") or "accurate") == "accurate" else 1)
-    row.addWidget(asr_box, 1)
+    chk_auto = QCheckBox("新句子自动朗读")
+    chk_auto.setChecked(bool(cfg.get("auto_read", False)))
+    row.addWidget(chk_auto)
+    row.addSpacing(12)
+    chk_hl = QCheckBox("朗读时逐词高亮")
+    chk_hl.setChecked(bool(cfg.get("word_hl", True)))
+    row.addWidget(chk_hl)
+    row.addStretch(1)
     root.addLayout(row)
+
     row = QHBoxLayout()
-    row.addWidget(QLabel("响应速度"))
-    lat_box = QComboBox()
-    lat_box.addItem("快速（语音最长 3.2 秒，0.2 秒断句）", "fast")
-    lat_box.addItem("均衡（语音最长 4.2 秒，0.4 秒断句，默认）", "balanced")
-    lat_box.addItem("准确（语音最长 5.5 秒，0.4 秒断句）", "accurate")
-    cur_lat = str(cfg.get("latency_mode") or "balanced")
-    for i in range(lat_box.count()):
-        if lat_box.itemData(i) == cur_lat:
-            lat_box.setCurrentIndex(i)
-    lat_box.setToolTip("越短越跟手，但一句话可能被切在两段；连麦短句多用快速")
-    row.addWidget(lat_box, 1)
+    row.addWidget(QLabel("语速"))
+    rate = QSpinBox()
+    rate.setRange(-4, 4)
+    rate.setValue(int(cfg.get("read_rate") or 0))
+    row.addWidget(rate)
+    row.addWidget(QLabel("（0 正常，负数更慢，跟读建议 -2 ~ -1）"))
+    row.addStretch(1)
     root.addLayout(row)
+
+    voice_hint = QLabel("音色：%s（英文） · %s（中文）。本机系统自带这两个，想换可在 Windows 设置里加语言语音包。"
+                        % (owner.overlay.tts.voice_name("en"), owner.overlay.tts.voice_name("zh")))
+    voice_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    voice_hint.setWordWrap(True)
+    root.addWidget(voice_hint)
+
+    hl_hint = QLabel("字幕条常态对鼠标穿透，游戏里点不到它。按 %s 进入交互模式，就能点朗读 / 循环 / 收藏、选中文字；"
+                     "再按一次（或按 ESC / %s）恢复穿透，鼠标还给游戏。"
+                     % (cfg.get("hotkey_toggle") or "Ctrl+Alt+G",
+                        cfg.get("hotkey_panic") or "Ctrl+Alt+Q"))
+    hl_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    hl_hint.setWordWrap(True)
+    root.addWidget(hl_hint)
+
+    head("谁在说话")
+    chk_spk = QCheckBox("标注每句是谁说的（说话人1 / 2 / 3…）")
+    chk_spk.setChecked(bool(cfg.get("diarize", False)))
+    root.addWidget(chk_spk)
+    spk_hint = QLabel("按声音纹理归人：同一个人的句子归成一类，最多 4 人。素材够长才稳，一句话太短偶尔会认错。")
+    spk_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    spk_hint.setWordWrap(True)
+    root.addWidget(spk_hint)
+
+    chk_spk_col = QCheckBox("记录表里显示说话人列（不用时关掉，省横向空间）")
+    chk_spk_col.setChecked(bool(cfg.get("show_spk_col", True)))
+    root.addWidget(chk_spk_col)
+
     row = QHBoxLayout()
-    row.addWidget(QLabel("自定义热词"))
-    hot_box = QLineEdit(str(cfg.get("hotwords_custom") or ""))
-    hot_box.setPlaceholderText("常被听错的词，空格分隔，例如：萝莉 御姐 抽卡 老陈")
-    hot_box.setToolTip("只在「热词模式」不是关闭时生效，只在本机处理，不上传")
-    row.addWidget(hot_box, 1)
+    row.addWidget(QLabel("声纹灵敏度"))
+    spk_mode = QComboBox()
+    spk_mode.addItems(["严格（宁可不标，不标错）", "均衡（默认）", "宽松（尽量都标上）"])
+    spk_mode.setCurrentIndex({"strict": 0, "balanced": 1, "loose": 2}.get(cfg.get("spk_mode"), 1))
+    row.addWidget(spk_mode, 1)
     root.addLayout(row)
+
     row = QHBoxLayout()
-    row.addWidget(QLabel("热词模式"))
-    hw_box = QComboBox()
-    hw_box.addItem("只用手填的词（推荐）", "custom")
-    hw_box.addItem("只用内置词表 + 手填", "full")
-    hw_box.addItem("关闭热词", "off")
-    cur_hw = str(cfg.get("asr_hotwords_mode") or "custom")
-    for i in range(hw_box.count()):
-        if hw_box.itemData(i) == cur_hw:
-            hw_box.setCurrentIndex(i)
-    hw_box.setToolTip("热词会当成提示词喂给模型：静音或听不清时，模型可能照着词表“念”出你没说的设定词。"
-                      "默认只用手填的词；出现“没说话却打出设定词”就切到关闭")
-    row.addWidget(hw_box, 1)
+    row.addWidget(QLabel("最短停留"))
+    hold = QDoubleSpinBox()
+    hold.setRange(0.5, 2.5)
+    hold.setSingleStep(0.1)
+    hold.setDecimals(1)
+    hold.setValue(float(cfg.get("hold_scale") or 1.0))
+    row.addWidget(hold)
+    row.addWidget(QLabel("倍（默认 1.0；每句约 0.9～2.8 秒，觉得太快可提高到 1.3 以上）"))
+    row.addStretch(1)
     root.addLayout(row)
-    def _preview_hw():
-        cfg["asr_hotwords_mode"] = str(hw_box.currentData() or "custom")
-        save_config(cfg)
-    hw_box.currentIndexChanged.connect(lambda _i: _preview_hw())
-    asr_hint = QLabel("想让识别更准：先选「准确优先」；口音重就把模型换成 medium 或 turbo（首次使用会自动下载约 1.5G，CPU 上更慢）。")
-    asr_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    asr_hint.setWordWrap(True)
-    root.addWidget(asr_hint)
 
-    # 离线模型管理：尺寸特点、缓存状态、按需下载；翻译模型的状态也在这里看
-    mm = QHBoxLayout()
-    model_desc = QLabel("")
-    model_desc.setStyleSheet("color:#5E5A52;font-size:11px;")
-    model_desc.setWordWrap(True)
-    mm.addWidget(model_desc, 1)
+    row = QHBoxLayout()
+    row.addWidget(QLabel("断句阈值"))
+    sens = QDoubleSpinBox()
+    sens.setRange(0.001, 0.05)
+    sens.setDecimals(3)
+    sens.setSingleStep(0.001)
+    sens.setValue(float(cfg.get("sensitivity") or 0.006))
+    row.addWidget(sens)
+    row.addWidget(QLabel("背景音乐大就调高，人声小就调低"))
+    row.addStretch(1)
+    root.addLayout(row)
 
-    def _cache_text(name):
-        hit = asr_model_cached(name)
-        return "%s：%s（约 %dMB）· %s" % (
-            name, ASR_SIZES.get(name, {}).get("desc", ""), ASR_SIZES.get(name, {}).get("mb", 0),
-            "已下载" if hit else "未下载")
+    # 场景预设：一键切降噪 / VAD / 阈值三件套，并记住每个场景上次用的值
+    row_scene = QHBoxLayout()
+    row_scene.addWidget(QLabel("场景预设"))
+    scene_box = QComboBox()
+    scene_box.addItems(["FPS / 射击（保口音）", "看视频（降噪轻）", "语音聊天 / 连麦", "自定义"])
+    _sc = str(cfg.get("scene") or "fps")
+    scene_box.setCurrentIndex({"fps": 0, "video": 1, "chat": 2}.get(_sc, 3))
+    row_scene.addWidget(scene_box)
+    row_scene.addSpacing(12)
+    row_scene.addWidget(QLabel("降噪"))
+    noise_box = QComboBox()
+    noise_box.addItems(["关", "中等", "强"])
+    noise_box.setCurrentIndex(max(0, min(2, int(cfg.get("noise_level") or 0))))
+    row_scene.addWidget(noise_box)
+    row_scene.addSpacing(12)
+    row_scene.addWidget(QLabel("VAD 灵敏度"))
+    vad_box = QComboBox()
+    vad_box.addItems(["高（小声也认）", "中", "低（抗噪）"])
+    vad_box.setCurrentIndex({"high": 0, "medium": 1, "low": 2}.get(
+        str(cfg.get("vad_sensitivity") or "medium"), 1))
+    row_scene.addWidget(vad_box)
+    row_scene.addStretch(1)
+    root.addLayout(row_scene)
+    scene_hint = QLabel("降噪默认关：强降噪会削掉 s/sh/x 这类辅音，口音更容易被听错；只有背景音乐盖住人声时才开到中等。")
+    scene_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    scene_hint.setWordWrap(True)
+    root.addWidget(scene_hint)
 
-    def _update_model_desc(*_a):
-        mid = (model_box.currentData() or "auto")
-        if mid == "auto":
-            mid = default_asr_model()
-        model_desc.setText(_cache_text(mid))
-    model_box.currentIndexChanged.connect(_update_model_desc)
-    _update_model_desc()
-
-    btn_dl = QPushButton("下载这个模型")
-    btn_dl.setCursor(Qt.PointingHandCursor)
-    btn_dl.setFixedHeight(26)
-    mm.addWidget(btn_dl)
-    root.addLayout(mm)
-
-    tr_status = QLabel("离线翻译（Argos %s）：%s" % (
-        pair_label(CURRENT_LANGS.get("sl", "zh"), CURRENT_LANGS.get("tl", "en")),
-        "已安装" if argos_installed() else "首次使用会自动准备"))
-    tr_status.setStyleSheet("color:#5E5A52;font-size:11px;")
-    root.addWidget(tr_status)
-
-    dl_state = QLabel("")
-    dl_state.setStyleSheet("color:#5E5A52;font-size:11px;")
-    root.addWidget(dl_state)
-
-    def _download_model():
-        name = (model_box.currentData() or "auto")
-        if name == "auto":
-            name = default_asr_model()
-        if asr_model_cached(name):
-            dl_state.setText("%s 已经下载好了，切换后点「保存并应用」即可。" % name)
+    # 切换预设时立刻把三件套带过来（真正保存仍在点「保存并应用」）
+    def _apply_scene(idx):
+        keys = {0: "fps", 1: "video", 2: "chat"}.get(idx)
+        if not keys:
             return
-        dl_state.setText("正在后台下载 %s（约 %dMB），完成后会写进运行日志。" % (
-            name, ASR_SIZES.get(name, {}).get("mb", 0)))
+        prof = (cfg.get("scene_profiles") or {}).get(keys) or {}
+        noise_box.setCurrentIndex(max(0, min(2, int(prof.get("noise_level", 1)))))
+        vad_box.setCurrentIndex({"high": 0, "medium": 1, "low": 2}.get(
+            str(prof.get("vad_sensitivity") or "medium"), 1))
+        if prof.get("sensitivity"):
+            sens.setValue(float(prof["sensitivity"]))
+    scene_box.currentIndexChanged.connect(_apply_scene)
 
-        def work():
-            try:
-                from faster_whisper import WhisperModel
-                WhisperModel(name, device="cpu", compute_type="int8")
-                log("ASR 模型已下载：%s" % name)
-            except Exception as e:
-                log("ASR 模型下载失败：%s｜%r" % (name, e))
+    # 记录占多少地方：表格行数 + 保留天数
+    row_keep = QHBoxLayout()
+    row_keep.addWidget(QLabel("列表显示条数"))
+    keep_rows = QComboBox()
+    keep_rows.addItems(["100 条", "300 条（默认）", "500 条"])
+    keep_rows.setCurrentIndex({100: 0, 300: 1, 500: 2}.get(int(cfg.get("keep_rows") or 300), 1))
+    row_keep.addWidget(keep_rows)
+    row_keep.addSpacing(14)
+    row_keep.addWidget(QLabel("记录保留"))
+    keep_days = QComboBox()
+    keep_days.addItems(["永久保留（默认）", "保留 90 天", "保留 30 天", "保留 7 天"])
+    keep_days.setCurrentIndex({0: 0, 90: 1, 30: 2, 7: 3}.get(int(cfg.get("keep_days") or 0), 0))
+    row_keep.addWidget(keep_days)
+    row_keep.addStretch(1)
+    root.addLayout(row_keep)
 
-        threading.Thread(target=work, daemon=True).start()
+    keep_hint = QLabel("记录按天存在磁盘上；旧日期会自动压缩成 .gz（体积约原来八分之一）。"
+                       "列表只把最近这些条放进内存，更早的靠搜索在磁盘里查。")
+    keep_hint.setWordWrap(True)
+    keep_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    root.addWidget(keep_hint)
 
-    btn_dl.clicked.connect(_download_model)
+    chk_audio = QCheckBox("收藏时保存音频切片（复习能听原声；低配或不想占磁盘就关掉）")
+    chk_audio.setChecked(bool(cfg.get("save_audio", True)))
+    root.addWidget(chk_audio)
+    audio_hint = QLabel("切片带 2 秒前置缓存，句头和句尾都不会被切掉；每条收藏记录带「⏱ 时:分:秒–时:分:秒」。关掉后收藏照旧，只是没有 wav。")
+    audio_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    audio_hint.setWordWrap(True)
+    root.addWidget(audio_hint)
 
-    row = QHBoxLayout()
-    chk_short = QCheckBox("过滤过短识别（单字 / 语气词不记录、不推字幕）")
-    chk_short.setChecked(bool(cfg.get("filter_short", True)))
-    row.addWidget(chk_short)
-    row.addSpacing(12)
-    row.addWidget(QLabel("最短"))
-    min_chars = QSpinBox()
-    min_chars.setRange(1, 8)
-    min_chars.setSuffix(" 字")
-    min_chars.setValue(int(cfg.get("min_chars") or 2))
-    row.addWidget(min_chars)
-    row.addSpacing(10)
-    row.addWidget(QLabel("按词语言"))
-    min_words = QSpinBox()
-    min_words.setRange(1, 10)
-    min_words.setSuffix(" 词")
-    min_words.setValue(int(cfg.get("min_words") or 2))
-    min_words.setToolTip("英/法/德等空格分词语种按单词计数，中日按字符计数，阈值各自独立")
-    row.addWidget(min_words)
-    row.addStretch(1)
-    root.addLayout(row)
-    short_hint = QLabel("「啊」「哦」「Yeah.」这类碎片会被丢掉，表格和字幕都不再被塞满；想全收就把勾去掉。")
-    short_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    short_hint.setWordWrap(True)
-    root.addWidget(short_hint)
-
-    row = QHBoxLayout()
-    row.addWidget(QLabel("回放设备"))
-    dev_box = QComboBox()
-    devices = owner.list_loopback()
-    dev_box.addItems(devices)
-    cur = cfg.get("loopback_device") or (devices[0] if devices else "")
-    if cur:
-        dev_box.setCurrentText(cur)
-    row.addWidget(dev_box, 1)
-    root.addLayout(row)
-    hint = QLabel("默认跟系统扬声器走；用耳机或虚拟声卡时在这里指定。")
-    hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    root.addWidget(hint)
-
-    head("字幕长什么样")
-    row = QHBoxLayout()
-    row.addWidget(QLabel("界面字号"))
-    size = QSpinBox()
-    size.setRange(11, 17)
-    size.setToolTip("只改主界面文字大小。字幕字号会按句子长短自动变，不用手调")
-    size.setValue(int(cfg.get("ui_font_size") or 13))
-    row.addWidget(size)
-    row.addSpacing(18)
-    row.addWidget(QLabel("背景不透明度"))
-    alpha = QDoubleSpinBox()
-    alpha.setRange(0.15, 1.0)
-    alpha.setSingleStep(0.02)
-    alpha.setValue(float(cfg.get("opacity") or 0.9))
-    # 拖动/改数就立刻作用到字幕条上，不用等保存；文字始终不透明
-    alpha.valueChanged.connect(lambda v: owner.overlay.preview_opacity(float(v)))
-    size.valueChanged.connect(lambda v: _preview_font(int(v)))
-    row.addWidget(alpha)
-    row.addStretch(1)
-    root.addLayout(row)
-
-    row2 = QHBoxLayout()
-    row2.addWidget(QLabel("字幕条上一句"))
-    prev_n = QSpinBox()
-    prev_n.setRange(0, 3)
-    prev_n.setValue(int(cfg.get("overlay_prev_rows", 2)))
-    prev_n.setToolTip("字幕条里除当前句外还留几句；0 = 只显示当前句，不挡视野")
-    row2.addWidget(prev_n)
-    row2.addWidget(QLabel("句（0 只留当前句，最多 3 句）"))
-    row2.addStretch(1)
-    root.addLayout(row2)
-
-    row2b = QHBoxLayout()
-    chk_idle = QCheckBox("太久没有新字幕就自动藏起来")
-    chk_idle.setChecked(bool(cfg.get("overlay_idle_hide", True)))
-    chk_idle.setToolTip("藏起来以后，你再说话它会自己回来，并且不带上之前的旧句")
-    row2b.addWidget(chk_idle)
-    idle_sec = QSpinBox()
-    idle_sec.setRange(4, 120)
-    idle_sec.setSuffix(" 秒")
-    idle_sec.setValue(int(cfg.get("overlay_idle_sec") or 15))
-    idle_sec.setToolTip("安静超过这么久就藏；4–120 秒之间随便调")
-    row2b.addWidget(idle_sec)
-    row2b.addWidget(QLabel("没声音就算安静"))
-    row2b.addStretch(1)
-    root.addLayout(row2b)
-
-    def _preview_prev(v):
-        try:
-            owner.overlay.cfg["overlay_prev_rows"] = int(v)
-            owner.overlay._render_history()
-            owner.overlay._fit_height()
-        except Exception:
-            pass
-    prev_n.valueChanged.connect(lambda v: _preview_prev(int(v)))
-
-    row3 = QHBoxLayout()
-    row3.addWidget(QLabel("字幕位置"))
-    pos_box = QComboBox()
-    for label, key in (("底部居中（默认）", "bottom"),
-                       ("底部偏上", "bottom_high"),
-                       ("顶部居中", "top"),
-                       ("自由位置（拖动后记住）", "free")):
-        pos_box.addItem(label, key)
-    try:
-        idx = max(0, [pos_box.itemData(i) for i in range(pos_box.count())]
-                  .index(str(cfg.get("overlay_pos") or "bottom")))
-        pos_box.setCurrentIndex(idx)
-    except Exception:
-        pos_box.setCurrentIndex(0)
-    pos_box.setMinimumWidth(190)
-    row3.addWidget(pos_box)
-    btn_reset_pos = QPushButton("复位到屏幕顶部")
-    btn_reset_pos.setObjectName("ghost")
-    btn_reset_pos.setCursor(Qt.PointingHandCursor)
-    btn_reset_pos.setToolTip("字幕条拖出屏幕、或换了显示器后一键找回")
-    row3.addWidget(btn_reset_pos)
-    row3.addStretch(1)
-    root.addLayout(row3)
-
-    def _reset_pos():
-        try:
-            owner.overlay.cfg["overlay_pos"] = "top"
-            owner.overlay.cfg.pop("window", None)
-            cfg["overlay_pos"] = "top"
-            cfg.pop("window", None)
-            owner.overlay.apply_position(save=True)
-            owner.overlay._fit_height()
-            try:
-                pos_box.setCurrentIndex(2)
-            except Exception:
-                pass
-            save_config(cfg)
-        except Exception as e:
-            log("复位字幕条位置失败：" + repr(e))
-    btn_reset_pos.clicked.connect(_reset_pos)
-
-    def _preview_pos():
-        try:
-            owner.overlay.cfg["overlay_pos"] = str(pos_box.currentData() or "bottom")
-            owner.overlay.apply_position()
-        except Exception:
-            pass
-    pos_box.currentIndexChanged.connect(lambda _i: _preview_pos())
-
-    row3b = QHBoxLayout()
-    row3b.addWidget(QLabel("字幕形态"))
-    sty_box = QComboBox()
-    sty_box.addItem("对话框（高度固定，推荐）", "dialog")
-    sty_box.addItem("字幕条（高度随内容伸缩）", "banner")
-    sty_box.setCurrentIndex(
-        1 if str(cfg.get("overlay_style") or "dialog") == "banner" else 0)
-    sty_box.setMinimumWidth(190)
-    row3b.addWidget(sty_box)
-    row3b.addStretch(1)
-    root.addLayout(row3b)
-
-    def _preview_style():
-        try:
-            owner.overlay.cfg["overlay_style"] = str(sty_box.currentData() or "dialog")
-            owner.overlay.apply_position()
-            owner.overlay._fit_height()
-        except Exception:
-            pass
-    sty_box.currentIndexChanged.connect(lambda _i: _preview_style())
-
-    row3c = QHBoxLayout()
-    row3c.addWidget(QLabel("顶部留白"))
-    gap_spin = QSpinBox()
-    gap_spin.setRange(0, 200)
-    gap_spin.setSingleStep(4)
-    gap_spin.setSuffix(" px")
-    try:
-        gap_spin.setValue(int(cfg.get("overlay_gap_top") or 8))
-    except Exception:
-        gap_spin.setValue(8)
-    gap_spin.setToolTip("顶部锚定时离屏幕上沿的距离；游戏顶部有血条 / 任务条时往下压 30–60px")
-    row3c.addWidget(gap_spin)
-    tail_hint = QLabel("只影响顶部锚定，拖动实时生效")
-    tail_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    row3c.addWidget(tail_hint)
-    row3c.addStretch(1)
-    root.addLayout(row3c)
-
-    def _preview_gap(v):
-        try:
-            cfg["overlay_gap_top"] = int(v)
-            owner.overlay.cfg["overlay_gap_top"] = int(v)
-            owner.overlay.apply_position(save=True)
-        except Exception:
-            pass
-    gap_spin.valueChanged.connect(lambda v: _preview_gap(int(v)))
-
-    row3d = QHBoxLayout()
-    row3d.addWidget(QLabel("字幕皮肤"))
-    skin_box = QComboBox()
-    for _k, _v in OVERLAY_SKINS.items():
-        skin_box.addItem(_v.get("name") or _k, _k)
-    _cur_sk = str(cfg.get("overlay_skin") or "dialog_dark")
-    for i in range(skin_box.count()):
-        if skin_box.itemData(i) == _cur_sk:
-            skin_box.setCurrentIndex(i)
-    skin_box.setToolTip("只换外观：底色 / 描边 / 圆角 / 文字颜色与对齐；"
-                        "采集、翻译、历史行数这些逻辑都不受影响")
-    row3d.addWidget(skin_box, 1)
-    root.addLayout(row3d)
-
-    def _preview_skin():
-        k = str(skin_box.currentData() or "dialog_dark")
-        cfg["overlay_skin"] = k
-        try:
-            owner.overlay.cfg["overlay_skin"] = k
-            owner.overlay.update_look()
-            owner.overlay._render_history()
-            owner.overlay._fit_height()
-        except Exception as e:
-            log("切换字幕皮肤失败：" + repr(e))
-        save_config(cfg)
-    skin_box.currentIndexChanged.connect(lambda _i: _preview_skin())
-    pos_hint = QLabel("默认底部居中、离任务栏 72px；交互模式下拖动字幕条，靠近中线 / 底部会自动吸附，松手记住。")
-    pos_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    pos_hint.setWordWrap(True)
-    root.addWidget(pos_hint)
-    size_hint = QLabel("字号也能不进设置直接调：Ctrl+Alt+= 放大 / Ctrl+Alt+- 缩小；"
-                       "交互模式下 Ctrl+滚轮，或字幕条上的 A− / A+。")
-    size_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    size_hint.setWordWrap(True)
-    root.addWidget(size_hint)
-
-    chk_src = QCheckBox("同时显示中文原文")
-    chk_src.setChecked(bool(cfg.get("show_source")))
-    root.addWidget(chk_src)
-
-    chk_bilingual = QCheckBox("对照模式：悬浮条并排显示「中文 ｜ 英文」（更短，默认关）")
-    chk_bilingual.setChecked(bool(cfg.get("overlay_bilingual", False)))
-    root.addWidget(chk_bilingual)
-    bil_hint = QLabel("开着的时候中文和英文挤在同一行，卡片不会多长一行；关掉就是纯英文沉浸。")
-    bil_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    root.addWidget(bil_hint)
+    root.addStretch(1)
+    btns = QHBoxLayout()
+    btns.addStretch(1)
+    cancel = QPushButton("取消")
+    ok = QPushButton("保存并应用")
+    ok.setObjectName("primary")
+    btns.addWidget(cancel)
+    btns.addWidget(ok)
 
     # 字幕样式预设：游戏 / 观影 / 极简，字号、透明度、行数一起换
     head("电脑负担")
@@ -7171,42 +7332,6 @@ def build_settings(owner, embedded=False):
                                      (2 if int(prof["scroll_rows"]) >= 12 else 1))
         _place_anchor(prof.get("anchor") or "bottom")
     style_box.currentIndexChanged.connect(_apply_style)
-
-    head("朗读")
-    row = QHBoxLayout()
-    chk_auto = QCheckBox("新句子自动朗读")
-    chk_auto.setChecked(bool(cfg.get("auto_read", False)))
-    row.addWidget(chk_auto)
-    row.addSpacing(12)
-    chk_hl = QCheckBox("朗读时逐词高亮")
-    chk_hl.setChecked(bool(cfg.get("word_hl", True)))
-    row.addWidget(chk_hl)
-    row.addStretch(1)
-    root.addLayout(row)
-
-    row = QHBoxLayout()
-    row.addWidget(QLabel("语速"))
-    rate = QSpinBox()
-    rate.setRange(-4, 4)
-    rate.setValue(int(cfg.get("read_rate") or 0))
-    row.addWidget(rate)
-    row.addWidget(QLabel("（0 正常，负数更慢，跟读建议 -2 ~ -1）"))
-    row.addStretch(1)
-    root.addLayout(row)
-
-    voice_hint = QLabel("音色：%s（英文） · %s（中文）。本机系统自带这两个，想换可在 Windows 设置里加语言语音包。"
-                        % (owner.overlay.tts.voice_name("en"), owner.overlay.tts.voice_name("zh")))
-    voice_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    voice_hint.setWordWrap(True)
-    root.addWidget(voice_hint)
-
-    hl_hint = QLabel("字幕条常态对鼠标穿透，游戏里点不到它。按 %s 进入交互模式，就能点朗读 / 循环 / 收藏、选中文字；"
-                     "再按一次（或按 ESC / %s）恢复穿透，鼠标还给游戏。"
-                     % (cfg.get("hotkey_toggle") or "Ctrl+Alt+G",
-                        cfg.get("hotkey_panic") or "Ctrl+Alt+Q"))
-    hl_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    hl_hint.setWordWrap(True)
-    root.addWidget(hl_hint)
 
     head("快捷键")
     from PySide6.QtWidgets import QKeySequenceEdit
@@ -7342,130 +7467,6 @@ def build_settings(owner, embedded=False):
     idle_row.addStretch(1)
     root.addLayout(idle_row)
 
-    head("谁在说话")
-    chk_spk = QCheckBox("标注每句是谁说的（说话人1 / 2 / 3…）")
-    chk_spk.setChecked(bool(cfg.get("diarize", False)))
-    root.addWidget(chk_spk)
-    spk_hint = QLabel("按声音纹理归人：同一个人的句子归成一类，最多 4 人。素材够长才稳，一句话太短偶尔会认错。")
-    spk_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    spk_hint.setWordWrap(True)
-    root.addWidget(spk_hint)
-
-    chk_spk_col = QCheckBox("记录表里显示说话人列（不用时关掉，省横向空间）")
-    chk_spk_col.setChecked(bool(cfg.get("show_spk_col", True)))
-    root.addWidget(chk_spk_col)
-
-    row = QHBoxLayout()
-    row.addWidget(QLabel("声纹灵敏度"))
-    spk_mode = QComboBox()
-    spk_mode.addItems(["严格（宁可不标，不标错）", "均衡（默认）", "宽松（尽量都标上）"])
-    spk_mode.setCurrentIndex({"strict": 0, "balanced": 1, "loose": 2}.get(cfg.get("spk_mode"), 1))
-    row.addWidget(spk_mode, 1)
-    root.addLayout(row)
-
-    row = QHBoxLayout()
-    row.addWidget(QLabel("最短停留"))
-    hold = QDoubleSpinBox()
-    hold.setRange(0.5, 2.5)
-    hold.setSingleStep(0.1)
-    hold.setDecimals(1)
-    hold.setValue(float(cfg.get("hold_scale") or 1.0))
-    row.addWidget(hold)
-    row.addWidget(QLabel("倍（默认 1.0；每句约 0.9～2.8 秒，觉得太快可提高到 1.3 以上）"))
-    row.addStretch(1)
-    root.addLayout(row)
-
-    row = QHBoxLayout()
-    row.addWidget(QLabel("断句阈值"))
-    sens = QDoubleSpinBox()
-    sens.setRange(0.001, 0.05)
-    sens.setDecimals(3)
-    sens.setSingleStep(0.001)
-    sens.setValue(float(cfg.get("sensitivity") or 0.006))
-    row.addWidget(sens)
-    row.addWidget(QLabel("背景音乐大就调高，人声小就调低"))
-    row.addStretch(1)
-    root.addLayout(row)
-
-    # 场景预设：一键切降噪 / VAD / 阈值三件套，并记住每个场景上次用的值
-    row_scene = QHBoxLayout()
-    row_scene.addWidget(QLabel("场景预设"))
-    scene_box = QComboBox()
-    scene_box.addItems(["FPS / 射击（保口音）", "看视频（降噪轻）", "语音聊天 / 连麦", "自定义"])
-    _sc = str(cfg.get("scene") or "fps")
-    scene_box.setCurrentIndex({"fps": 0, "video": 1, "chat": 2}.get(_sc, 3))
-    row_scene.addWidget(scene_box)
-    row_scene.addSpacing(12)
-    row_scene.addWidget(QLabel("降噪"))
-    noise_box = QComboBox()
-    noise_box.addItems(["关", "中等", "强"])
-    noise_box.setCurrentIndex(max(0, min(2, int(cfg.get("noise_level") or 0))))
-    row_scene.addWidget(noise_box)
-    row_scene.addSpacing(12)
-    row_scene.addWidget(QLabel("VAD 灵敏度"))
-    vad_box = QComboBox()
-    vad_box.addItems(["高（小声也认）", "中", "低（抗噪）"])
-    vad_box.setCurrentIndex({"high": 0, "medium": 1, "low": 2}.get(
-        str(cfg.get("vad_sensitivity") or "medium"), 1))
-    row_scene.addWidget(vad_box)
-    row_scene.addStretch(1)
-    root.addLayout(row_scene)
-    scene_hint = QLabel("降噪默认关：强降噪会削掉 s/sh/x 这类辅音，口音更容易被听错；只有背景音乐盖住人声时才开到中等。")
-    scene_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    scene_hint.setWordWrap(True)
-    root.addWidget(scene_hint)
-
-    # 切换预设时立刻把三件套带过来（真正保存仍在点「保存并应用」）
-    def _apply_scene(idx):
-        keys = {0: "fps", 1: "video", 2: "chat"}.get(idx)
-        if not keys:
-            return
-        prof = (cfg.get("scene_profiles") or {}).get(keys) or {}
-        noise_box.setCurrentIndex(max(0, min(2, int(prof.get("noise_level", 1)))))
-        vad_box.setCurrentIndex({"high": 0, "medium": 1, "low": 2}.get(
-            str(prof.get("vad_sensitivity") or "medium"), 1))
-        if prof.get("sensitivity"):
-            sens.setValue(float(prof["sensitivity"]))
-    scene_box.currentIndexChanged.connect(_apply_scene)
-
-    # 记录占多少地方：表格行数 + 保留天数
-    row_keep = QHBoxLayout()
-    row_keep.addWidget(QLabel("列表显示条数"))
-    keep_rows = QComboBox()
-    keep_rows.addItems(["100 条", "300 条（默认）", "500 条"])
-    keep_rows.setCurrentIndex({100: 0, 300: 1, 500: 2}.get(int(cfg.get("keep_rows") or 300), 1))
-    row_keep.addWidget(keep_rows)
-    row_keep.addSpacing(14)
-    row_keep.addWidget(QLabel("记录保留"))
-    keep_days = QComboBox()
-    keep_days.addItems(["永久保留（默认）", "保留 90 天", "保留 30 天", "保留 7 天"])
-    keep_days.setCurrentIndex({0: 0, 90: 1, 30: 2, 7: 3}.get(int(cfg.get("keep_days") or 0), 0))
-    row_keep.addWidget(keep_days)
-    row_keep.addStretch(1)
-    root.addLayout(row_keep)
-
-    keep_hint = QLabel("记录按天存在磁盘上；旧日期会自动压缩成 .gz（体积约原来八分之一）。"
-                       "列表只把最近这些条放进内存，更早的靠搜索在磁盘里查。")
-    keep_hint.setWordWrap(True)
-    keep_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    root.addWidget(keep_hint)
-
-    chk_audio = QCheckBox("收藏时保存音频切片（复习能听原声；低配或不想占磁盘就关掉）")
-    chk_audio.setChecked(bool(cfg.get("save_audio", True)))
-    root.addWidget(chk_audio)
-    audio_hint = QLabel("切片带 2 秒前置缓存，句头和句尾都不会被切掉；每条收藏记录带「⏱ 时:分:秒–时:分:秒」。关掉后收藏照旧，只是没有 wav。")
-    audio_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    audio_hint.setWordWrap(True)
-    root.addWidget(audio_hint)
-
-    root.addStretch(1)
-    btns = QHBoxLayout()
-    btns.addStretch(1)
-    cancel = QPushButton("取消")
-    ok = QPushButton("保存并应用")
-    ok.setObjectName("primary")
-    btns.addWidget(cancel)
-    btns.addWidget(ok)
     root.addLayout(btns)
     def _cancel():
         owner.overlay.update_look()      # 取消：把实时预览退回到已保存的样子
