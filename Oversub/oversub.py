@@ -3456,6 +3456,16 @@ class Pipeline(threading.Thread):
                 elif sl_now == "en" and _cjk_n >= 2 and _en_n == 0:
                     sl_now = "zh"
                     log("语种兜底：这句按中文处理（检测原值 en）")
+                # 中文模式解码英文时，Whisper 会把每个词的停顿都标成逗号，出来就是
+                # “People, always, told, me, be, careful, now.” 这种逐词逗号。
+                # 判定为英文后按比例收掉：逗号数接近词数才清，正常句子的逗号不动。
+                if sl_now == "en" and zh:
+                    _w = re.findall(r"[A-Za-z']+", zh)
+                    _c = zh.count(",") + zh.count("，")
+                    if len(_w) >= 3 and _c >= max(2, int(len(_w) * 0.6)):
+                        _tail = "." if zh.strip()[-1:] in ".!?。！？" else ""
+                        zh = " ".join(_w) + _tail
+                        log("英文逐词逗号已收掉：%s" % zh[:40])
                 tl_now = CURRENT_LANGS.get("tl", "en")
                 if sl_now == tl_now:
                     tl_now = "en" if tl_now == "zh" else "zh"
