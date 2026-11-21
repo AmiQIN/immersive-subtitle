@@ -11771,6 +11771,19 @@ class MainWindow:
             self.bar_state.setText("已暂停" if paused else "捕获中")
             self.bar_audio.setText("音频：%s" % (
                 "已暂停" if paused else (dev if len(dev) <= 16 else dev[:14] + "…")))
+        # 字幕条上的状态文字也按三态兜底同步：某个分支漏设时，不再一直卡着「已暂停」
+        try:
+            ov = getattr(self.owner, "overlay", None)
+            if ov is not None:
+                cur = str(ov.status.text() or "")
+                if paused:
+                    ov.set_status("已暂停", "")
+                elif not running:
+                    ov.set_status("未开始", "")
+                elif cur in ("已暂停", "未开始", "准备中…"):
+                    ov.set_status("识别中", "ok")
+        except Exception:
+            pass
 
     def toggle_pin(self, on):
         from PySide6.QtCore import Qt as _PinQt
@@ -14977,6 +14990,12 @@ class App:
             self.overlay.btn_pause.setText("暂停捕获")
         except Exception:
             pass
+        # 开始/恢复后立刻把字幕条状态改回「识别中」：以前这里只改按钮文案，
+        # 状态文字还停在上一轮留下的「已暂停」，于是点「继续捕获」看着像没反应。
+        try:
+            self.overlay.set_status("识别中", "ok")
+        except Exception:
+            pass
         try:
             self.main._sync_capture_ui()
         except Exception:
@@ -15037,6 +15056,7 @@ class App:
 
     def toggle_pause(self):
         running = bool(self.capture and getattr(self.capture, "running", False))
+        log("捕获切换：running=%s paused=%s" % (running, self.paused))
         if not running and not self.paused:
             # 从未开始：第一次点就是开始。原来直接落进暂停分支，要点两次才真正开始。
             self.paused = False
