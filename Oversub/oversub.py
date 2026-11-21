@@ -192,7 +192,7 @@ DEFAULT_CONFIG = {
     "show_source": True,
     "font_size": 22,
     "overlay_prev_rows": 0,       # 字幕条里除当前句外还留几句历史；0 = 只显示当前句（对话框形态）
-    "overlay_idle_hide": True,    # 长时间没有新字幕就自动隐藏整条，别一直挡画面
+    "overlay_idle_hide": True,    # 长时间没有新字幕就收成单行状态条，不完全消失
     "overlay_idle_sec": 15,       # 多久算「长时间」，秒
     "overlay_idle_hide": 8,       # 多久没有新句就把上一句淡出（秒）
     "opacity": 0.9,
@@ -6111,36 +6111,37 @@ class Overlay:
         try:
             self._idle_hidden = True
             self._pending = None
-            # 隐藏的同时把历史揉掉：下次开口只从新的一句开始，别把十几秒前的旧话端回来
+            # 历史清掉：下次开口只从新的一句开始，别把十几秒前的旧话端回来
             self._hist = []
             self._render_history()
-            self.hist_box.setVisible(False)
-            self.divider.setVisible(False)
-            self.win.hide()
-            log("闲置 %.0f 秒没有新字幕，字幕条已隐藏（历史一并清空）" % limit)
+            try:
+                self.hist_box.setVisible(False)
+                self.divider.setVisible(False)
+            except Exception:
+                pass
+            # 不再整条消失：收成单行状态条（和刚启动时一样大），位置和三个按钮都还在，
+            # 既不完全挡视野，也不会让人以为程序没在跑。
+            self.set_compact(True)
+            try:
+                self.win.setWindowOpacity(0.78)     # 静默态再淡一档
+            except Exception:
+                pass
+            log("闲置 %.0f 秒没有新字幕，字幕条收成单行（历史一并清空）" % limit)
         except Exception as e:
-            log("闲置隐藏失败：" + repr(e))
+            log("闲置收合失败：" + repr(e))
 
     def _wake_from_idle(self):
-        """再开口：直接展开成完整对话框，历史从零开始。"""
+        """再开口：展开回完整对话框，历史从零开始。"""
         try:
             self._idle_hidden = False
             self._hist = []
             self._pending = None
             self._render_history()
-            self.hist_box.setVisible(False)
-            self.divider.setVisible(False)
-            self._compact = False
-            for w in (self.spk_label, self.src_label, self.dst_label):
-                try:
-                    w.setVisible(True)
-                except Exception:
-                    pass
             try:
-                self.src_label.setVisible(bool(self.cfg.get("show_source", True)))
+                self.win.setWindowOpacity(1.0)
             except Exception:
                 pass
-            self.apply_position(save=False)
+            self.set_compact(False)
             self.win.show()
             self.win.raise_()
             self._last_live = time.monotonic()
@@ -6454,15 +6455,15 @@ def build_settings(owner, embedded=False):
     root.addLayout(row2)
 
     row2b = QHBoxLayout()
-    chk_idle = QCheckBox("太久没有新字幕就自动藏起来")
+    chk_idle = QCheckBox("太久没有新字幕就收成单行")
     chk_idle.setChecked(bool(cfg.get("overlay_idle_hide", True)))
-    chk_idle.setToolTip("藏起来以后，你再说话它会自己回来，并且不带上之前的旧句")
+    chk_idle.setToolTip("不会整个消失：缩成刚启动时那条（只剩状态和按钮），你再说话它自己铺开，旧句不带回来")
     row2b.addWidget(chk_idle)
     idle_sec = QSpinBox()
     idle_sec.setRange(4, 120)
     idle_sec.setSuffix(" 秒")
     idle_sec.setValue(int(cfg.get("overlay_idle_sec") or 15))
-    idle_sec.setToolTip("安静超过这么久就藏；4–120 秒之间随便调")
+    idle_sec.setToolTip("安静超过这么久就收起来；4–120 秒之间随便调")
     row2b.addWidget(idle_sec)
     row2b.addWidget(QLabel("没声音就算安静"))
     row2b.addStretch(1)
