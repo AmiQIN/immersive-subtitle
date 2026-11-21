@@ -3,6 +3,7 @@
 不联网、不花钱；在线引擎留了接口，填了 key 就能切过去。
 """
 
+import ctypes
 import json
 import http.server
 import os
@@ -1946,6 +1947,135 @@ def rewrite_fav(rows):
         log("写收藏失败：" + repr(e))
 
 
+# ---------------------------------------------------------------- 朗读播放（可指定设备）
+# PlaySound 只认系统默认设备，设置里选的"朗读输出"根本落不到播放上。
+# 这里用 MME（waveOut）自己播 wav，能把声音送到指定的那个扬声器 / 耳机。
+class _MMECAPS(ctypes.Structure):
+    _fields_ = [("wMid", ctypes.c_ushort), ("wPid", ctypes.c_ushort),
+                ("vDriverVersion", ctypes.c_uint), ("szPname", ctypes.c_wchar * 32),
+                ("dwFormats", ctypes.c_ulong), ("wChannels", ctypes.c_ushort),
+                ("wReserved1", ctypes.c_ushort), ("dwSupport", ctypes.c_ulong)]
+
+
+class _WAVEFMT(ctypes.Structure):
+    _fields_ = [("wFormatTag", ctypes.c_ushort), ("nChannels", ctypes.c_ushort),
+                ("nSamplesPerSec", ctypes.c_uint), ("nAvgBytesPerSec", ctypes.c_uint),
+                ("nBlockAlign", ctypes.c_ushort), ("wBitsPerSample", ctypes.c_ushort),
+                ("cbSize", ctypes.c_ushort)]
+
+
+class _WAVHDR(ctypes.Structure):
+    _fields_ = [("lpData", ctypes.c_void_p), ("dwBufferLength", ctypes.c_uint),
+                ("dwBytesRecorded", ctypes.c_uint), ("dwUser", ctypes.c_size_t),
+                ("dwFlags", ctypes.c_uint), ("dwLoops", ctypes.c_uint),
+                ("lpNext", ctypes.c_void_p), ("reserved", ctypes.c_size_t)]
+
+
+_MME_STATE = {"h": None, "stop": False}
+_MME_LIST_CACHE = {"at": 0.0, "names": []}
+
+
+def mme_output_devices(force=False):
+    """系统里所有播放设备（MME 名）。设置页下拉、试听都用它，保证名字能和播放对上。"""
+    try:
+        if not force and _MME_LIST_CACHE["names"] \
+                and time.monotonic() - _MME_LIST_CACHE["at"] < 20:
+            return list(_MME_LIST_CACHE["names"])
+        w = ctypes.WinDLL("winmm")
+        n = int(w.waveOutGetNumDevs())
+        names = []
+        for i in range(max(0, n)):
+            caps = _MMECAPS()
+            if w.waveOutGetDevCapsW(ctypes.c_uint(i), ctypes.byref(caps),
+                                    ctypes.sizeof(caps)) == 0:
+                name = str(caps.szPname).strip()
+                if name:
+                    names.append(name)
+        _MME_LIST_CACHE.update(at=time.monotonic(), names=names)
+        return list(names)
+    except Exception as e:
+        log("枚举朗读设备失败：" + repr(e))
+        return []
+
+
+def _mme_index_by_name(name):
+    """设备名 → MME 序号；空名回 -1（WAVE_MAPPER，系统默认）。"""
+    want = str(name or "").strip().lower()
+    names = mme_output_devices()
+    if not want:
+        return -1
+    for i, n in enumerate(names):
+        if n.lower() == want:
+            return i
+    for i, n in enumerate(names):
+        if want in n.lower() or n.lower() in want:
+            return i
+    return -1
+
+
+def mme_play_wav(path, device=""):
+    """把 wav 送到指定设备同步播完。成功返回 True；打不开设备返回 False（调用方退回 PlaySound）。"""
+    try:
+        import wave
+        with wave.open(str(path), "rb") as wf:
+            ch, rate, sw = wf.getnchannels(), wf.getframerate(), wf.getsampwidth()
+            data = wf.readframes(wf.getnframes())
+    except Exception as e:
+        log("朗读读取音频失败：" + repr(e))
+        return False
+    if not data or not rate or not ch or not sw:
+        return False
+    w = ctypes.WinDLL("winmm")
+    fmt = _WAVEFMT(wFormatTag=1, nChannels=ch, nSamplesPerSec=rate,
+                   nAvgBytesPerSec=rate * ch * sw, nBlockAlign=ch * sw,
+                   wBitsPerSample=sw * 8, cbSize=0)
+    buf = ctypes.create_string_buffer(data, len(data))
+    h = ctypes.c_void_p()
+    dev = _mme_index_by_name(device)
+    rc = w.waveOutOpen(ctypes.byref(h), ctypes.c_uint(0xFFFFFFFF if dev < 0 else dev),
+                       ctypes.byref(fmt), ctypes.c_void_p(0), ctypes.c_void_p(0),
+                       ctypes.c_uint(0))
+    if rc != 0:
+        log("朗读设备打不开（%s，错误码 %d）" % (device or "系统默认", rc))
+        return False
+    hdr = _WAVHDR()
+    hdr.lpData = ctypes.addressof(buf)
+    hdr.dwBufferLength = ctypes.c_uint(len(data)).value
+    if w.waveOutPrepareHeader(h, ctypes.byref(hdr), ctypes.sizeof(hdr)) != 0:
+        try:
+            w.waveOutClose(h)
+        except Exception:
+            pass
+        return False
+    _MME_STATE.update(h=h, stop=False)
+    if w.waveOutWrite(h, ctypes.byref(hdr), ctypes.sizeof(hdr)) != 0:
+        try:
+            w.waveOutUnprepareHeader(h, ctypes.byref(hdr), ctypes.sizeof(hdr))
+            w.waveOutClose(h)
+        except Exception:
+            pass
+        _MME_STATE.update(h=None)
+        return False
+    end_t = time.monotonic() + len(data) / float(rate * ch * sw) + 1.2
+    while time.monotonic() < end_t:
+        if _MME_STATE["stop"] or hdr.dwFlags & 0x1:      # WHDR_DONE：播完了
+            break
+        time.sleep(0.02)
+    try:
+        w.waveOutReset(h)
+        w.waveOutUnprepareHeader(h, ctypes.byref(hdr), ctypes.sizeof(hdr))
+        w.waveOutClose(h)
+    except Exception:
+        pass
+    _MME_STATE.update(h=None)
+    return True
+
+
+def mme_stop():
+    """停下当前朗读（播放线程会在 20ms 内自己收尾，不在这里硬关句柄）。"""
+    _MME_STATE["stop"] = True
+
+
 # ---------------------------------------------------------------- 朗读（SAPI）
 VOICE_HINTS = {"zh": "Huihui", "en": "Zira", "ja": "Haruka", "ko": "Heami",
                "fr": "Hortense", "de": "Hedda", "es": "Helena", "ar": "Naayf"}
@@ -2105,16 +2235,27 @@ class TTSEngine:
             return None, 0.0
 
     @staticmethod
-    def play(path):
+    def play(path, device=""):
+        """先按设置里的设备播（MME，能真正落到那个扬声器）；打不开才退回系统默认。"""
+        if mme_play_wav(path, device or ""):
+            return True
         try:
             import ctypes
-            # 用 winmm 直接放：打包后 winsound 模块可能不在，windll 一定在
-            ctypes.windll.winmm.PlaySoundW(str(path), None, 0x00020000)   # SND_FILENAME，同步
+            ok = ctypes.windll.winmm.PlaySoundW(str(path), None, 0x00020000)   # SND_FILENAME，同步
+            if not ok:
+                log("朗读播放失败：系统默认设备返回失败（设备占用或没有可用的音频输出）")
+                return False
+            return True
         except Exception as e:
             log("朗读播放失败：" + repr(e))
+            return False
 
     @staticmethod
     def stop():
+        try:
+            mme_stop()
+        except Exception:
+            pass
         try:
             import ctypes
             ctypes.windll.winmm.PlaySoundW(None, None, 0)
@@ -4513,7 +4654,8 @@ class Overlay:
             log("朗读中（%.2f 秒）：%s" % (dur, text[:60]))
             self.tts_busy.set()
             try:
-                self.tts.play(path)
+                dev = str(self.cfg.get("tts_output_device") or "")
+                self.tts.play(path, dev)
             finally:
                 self.tts_busy.clear()
             self._read_events.put(("end", text, dur))
@@ -7720,6 +7862,59 @@ def build_settings(owner, embedded=False):
     voice_hint.setWordWrap(True)
     root.addWidget(voice_hint)
 
+    # 朗读从哪个设备出声：默认设备不对（显示器 / 虚拟声卡）时，点了朗读就是“没反应”
+    row = QHBoxLayout()
+    row.addWidget(QLabel("朗读从哪个设备出声"))
+    gbox = QComboBox()
+    gbox.setMinimumWidth(230)
+    gbox.addItem("系统默认（跟着 Windows 走）", "")
+    for _n in mme_output_devices(force=True):
+        gbox.addItem(_n, _n)
+    _want = str(cfg.get("tts_output_device") or "")
+    if _want:
+        for i in range(gbox.count()):
+            if str(gbox.itemData(i) or "") == _want:
+                gbox.setCurrentIndex(i)
+                break
+        else:
+            gbox.addItem("%s（已不在设备列表里）" % _want, _want)
+            gbox.setCurrentIndex(gbox.count() - 1)
+    row.addWidget(gbox, 1)
+    btn_gtest = QPushButton("试听")
+    btn_gtest.setToolTip("用这个设备放一句测试音；听得到就说明选对了")
+    row.addWidget(btn_gtest)
+    root.addLayout(row)
+
+    def _gtest():
+        _name = str(gbox.currentData() or "")
+        _text = "测试一下朗读声音，听到这句话说明这个设备选对了。"
+        try:
+            owner.main.set_status("试听中（%s）" % (_name or "系统默认"), "ok")
+        except Exception:
+            pass
+
+        def work():
+            try:
+                path, dur = owner.overlay.tts.say(_text, "zh", 0, None, 100)
+                if path:
+                    ok = owner.overlay.tts.play(path, _name)
+                    log("试听播放（%.2f 秒，%s）：%s" % (dur, _name or "系统默认",
+                                                        "成功" if ok else "失败"))
+                else:
+                    log("试听合成失败：没有拿到音频")
+            except Exception as e:
+                log("试听失败：" + repr(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    btn_gtest.clicked.connect(_gtest)
+
+    dev_hint = QLabel("点朗读没声音？多半是声音去了别的设备（显示器 / 虚拟声卡 / 已拔掉的声卡）。"
+                      "在这里挑你正在用的那个，点「试听」确认有声再保存。")
+    dev_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    dev_hint.setWordWrap(True)
+    root.addWidget(dev_hint)
+
     hl_hint = QLabel("字幕条常态对鼠标穿透，游戏里点不到它。按 %s 进入交互模式，就能点朗读 / 循环 / 收藏、选中文字；"
                      "再按一次（或按 ESC / %s）恢复穿透，鼠标还给游戏。"
                      % (cfg.get("hotkey_toggle") or "Ctrl+Alt+G",
@@ -8127,12 +8322,14 @@ def build_settings(owner, embedded=False):
         cfg["hotwords_custom"] = re.sub(r"[，,、;；\n]+", " ", hot_box.text()).strip()
         cfg["asr_hotwords_mode"] = str(hw_box.currentData() or "custom")
         cfg["read_rate"] = int(rate.value())
+        cfg["tts_output_device"] = str(gbox.currentData() or "")
         cfg["word_hl"] = bool(chk_hl.isChecked())
         cfg["auto_read"] = bool(chk_auto.isChecked())
         try:
             owner.overlay.chk_auto.setChecked(bool(chk_auto.isChecked()))
             owner.overlay.cfg["read_rate"] = cfg["read_rate"]
-            owner.overlay.cfg["word_hl"] = cfg["word_hl"]
+            owner.overlay.cfg["tts_output_device"] = cfg["tts_output_device"]
+            owner.overlay.tts.set_output_device(cfg["tts_output_device"])
         except Exception:
             pass
         # 热键：写法不认识就保留原值，别把自己弄失效
@@ -10551,9 +10748,18 @@ class MainWindow:
         vtts.addLayout(vrow)
         orow = QHBoxLayout()
         orow.addWidget(QLabel("朗读输出设备"))
-        self.tts_out_dev = QLineEdit()
-        self.tts_out_dev.setPlaceholderText("留空 = 系统默认；可填耳机 / 扬声器名称关键字")
+        self.tts_out_dev = QComboBox()
+        self.tts_out_dev.setMinimumWidth(210)
+        self.tts_out_dev.setToolTip(
+            "声音默认走系统的播放设备；听不到朗读多半是声音去了别的设备（显示器 / 虚拟声卡），"
+            "在这里选你戴着的那个，点「试听」验证。")
         orow.addWidget(self.tts_out_dev, 1)
+        self.btn_tts_preview = QPushButton("试听")
+        self.btn_tts_preview.setToolTip("用当前选中的设备放一句测试音，听得到就说明选对了")
+        orow.addWidget(self.btn_tts_preview)
+        self.btn_tts_dev_refresh = QPushButton("刷新")
+        self.btn_tts_dev_refresh.setToolTip("重新枚举播放设备（插拔耳机后用）")
+        orow.addWidget(self.btn_tts_dev_refresh)
         vtts.addLayout(orow)
 
         rrow = QHBoxLayout()
@@ -10753,7 +10959,9 @@ class MainWindow:
         self.lab_uilang.currentIndexChanged.connect(self.on_ui_lang)
         self.tts_lang_box.currentIndexChanged.connect(self.lab_tts_refresh)
         self.btn_tts_pack.clicked.connect(self.lab_tts_pack)
-        self.tts_out_dev.editingFinished.connect(self.lab_tts_device)
+        self.tts_out_dev.currentIndexChanged.connect(self.lab_tts_device)
+        self.btn_tts_preview.clicked.connect(self.lab_tts_preview)
+        self.btn_tts_dev_refresh.clicked.connect(lambda: self._fill_tts_devices(force=True))
         for w in (self.tts_voice_box, self.tts_rate, self.tts_vol, self.tts_min,
                   self.tts_qmax, self.tts_gap, self.tts_loop_gap, self.chk_tts_hl,
                   self.chk_tts_dup, self.chk_tts_full, self.chk_tts_duck,
@@ -11743,9 +11951,69 @@ class MainWindow:
         self.tts_pack_hint.setText("当前语种 TTS：%s ｜ 音色来自系统 SAPI，离线可用"
                                    % LANG_REGISTRY.get(code, {}).get("tts", "SAPI"))
         if hasattr(self, "tts_out_dev"):
-            self.tts_out_dev.blockSignals(True)
-            self.tts_out_dev.setText(str(self.cfg.get("tts_output_device") or ""))
-            self.tts_out_dev.blockSignals(False)
+            self._fill_tts_devices()
+
+    def _fill_tts_devices(self, force=False):
+        """把系统播放设备填进下拉：第一项永远是「系统默认」。"""
+        try:
+            want = str(self.cfg.get("tts_output_device") or "")
+            names = mme_output_devices(force=force)
+            box = self.tts_out_dev
+            box.blockSignals(True)
+            box.clear()
+            box.addItem("系统默认（跟着 Windows 走）", "")
+            for n in names:
+                box.addItem(n, n)
+            idx = 0
+            if want:
+                for i in range(box.count()):
+                    if str(box.itemData(i) or "") == want:
+                        idx = i
+                        break
+                else:
+                    box.addItem("%s（已不在设备列表里）" % want, want)
+                    idx = box.count() - 1
+            box.setCurrentIndex(idx)
+            box.blockSignals(False)
+            self.tts_pack_hint.setText(
+                "当前语种 TTS：%s ｜ 音色来自系统 SAPI，离线可用 ｜ 播放设备：%s"
+                % (LANG_REGISTRY.get(self._tts_lang(), {}).get("tts", "SAPI"),
+                   want or "系统默认"))
+        except Exception as e:
+            log("填写朗读设备失败：" + repr(e))
+
+    def lab_tts_device(self):
+        name = str(self.tts_out_dev.currentData() or "").strip()
+        self.cfg["tts_output_device"] = name
+        save_config(self.cfg)
+        try:
+            self.owner.overlay.tts.set_output_device(name)
+        except Exception as e:
+            log("设置朗读输出设备失败：" + repr(e))
+        self.set_status("朗读输出：%s" % (name or "系统默认"), "ok")
+
+    def lab_tts_preview(self):
+        """试听：用当前选中的设备读一句；听得到就说明设备和音量都通了。"""
+        name = str(self.tts_out_dev.currentData() or "").strip()
+        code = self._tts_lang()
+        text = "测试一下朗读声音，听到这句话说明设备选对了。" if code == "zh" \
+            else "This is a voice test. If you can hear this, the device is right."
+        self.set_status("试听中（%s）" % (name or "系统默认"), "ok")
+
+        def work():
+            try:
+                ov = self.owner.overlay
+                path, dur = ov.tts.say(text, code, 0, None, 100)
+                if path:
+                    ok = ov.tts.play(path, name)
+                    log("试听播放（%.2f 秒，%s）：%s" % (dur, name or "系统默认",
+                                                        "成功" if ok else "失败"))
+                else:
+                    log("试听合成失败：没有拿到音频")
+            except Exception as e:
+                log("试听失败：" + repr(e))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def lab_tts_apply(self):
         code = self._tts_lang()
@@ -11774,16 +12042,6 @@ class MainWindow:
         self.tts_rate_val.setText("%.2fx" % (self.tts_rate.value() / 100.0))
         self.tts_vol_val.setText(str(self.tts_vol.value()))
         self.set_status("朗读设置已更新（%s）" % LANG_REGISTRY.get(code, {}).get("name", code), "ok")
-
-    def lab_tts_device(self):
-        name = self.tts_out_dev.text().strip()
-        self.cfg["tts_output_device"] = name
-        save_config(self.cfg)
-        try:
-            self.owner.overlay.tts.set_output_device(name)
-        except Exception as e:
-            log("设置朗读输出设备失败：" + repr(e))
-        self.set_status("朗读输出：%s" % (name or "系统默认"), "ok")
 
     def lab_tts_pack(self):
         from PySide6.QtWidgets import QMessageBox
