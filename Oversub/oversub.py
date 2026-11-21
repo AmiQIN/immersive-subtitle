@@ -3445,6 +3445,17 @@ class Pipeline(threading.Thread):
                 # 源语种取本句检测结果；目标默认按配置，只有撞车（同语言）才翻成对向。
                 # 说中文 → 出英文，说英文 → 出中文，配置不用手动切。
                 sl_now = getattr(self, "last_det_lang", None) or CURRENT_LANGS.get("sl", "zh")
+                # 语种检测偶尔把一句英文判成中文，于是整句按 zh→en 翻，出来的“译文”
+                # 还是英文，看起来就是“没有中文翻译”。直接看识别出来的字做兜底：
+                # 一个汉字都没有、却有成串英文单词，就按英文处理，反向翻成中文。
+                _cjk_n = len(re.findall(r"[\u4e00-\u9fff]", zh))
+                _en_n = len(re.findall(r"[A-Za-z]{2,}", zh))
+                if sl_now == "zh" and _cjk_n == 0 and _en_n >= 2:
+                    sl_now = "en"
+                    log("语种兜底：这句按英文处理（检测原值 zh）")
+                elif sl_now == "en" and _cjk_n >= 2 and _en_n == 0:
+                    sl_now = "zh"
+                    log("语种兜底：这句按中文处理（检测原值 en）")
                 tl_now = CURRENT_LANGS.get("tl", "en")
                 if sl_now == tl_now:
                     tl_now = "en" if tl_now == "zh" else "zh"
@@ -3557,6 +3568,16 @@ class TranslateWorker(threading.Thread):
             # 方向按句取：中文句走 zh→en，英文句走 en→zh，缓存也要按方向分开
             sl_j = job.get("sl") or CURRENT_LANGS.get("sl", "zh")
             tl_j = job.get("tl") or ("en" if sl_j == "zh" else "zh")
+            # 同一道文本兜底：源语种标错时，宁可按字面语言重定方向，
+            # 否则英文句会被当成中文去翻，译文原样返回英文。
+            _cjk = len(re.findall(r"[\u4e00-\u9fff]", zh))
+            _lat = len(re.findall(r"[A-Za-z]{2,}", zh))
+            if sl_j == "zh" and _cjk == 0 and _lat >= 2:
+                sl_j = "en"
+                tl_j = "zh" if tl_j == "en" else tl_j
+            elif sl_j == "en" and _cjk >= 2 and _lat == 0:
+                sl_j = "zh"
+                tl_j = "en" if tl_j == "zh" else tl_j
             t0 = time.time()
             en = None
             ckey = (sl_j, tl_j, zh)
