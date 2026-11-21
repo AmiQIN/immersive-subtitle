@@ -6099,9 +6099,15 @@ class Overlay:
                     continue
                 lab.setFixedHeight(self._text_height(lab, inner) if lab.text() else 0)
             if self.hist_box.isVisibleTo(self.win):
-                total = 0
-                for w in getattr(self, "_hist_widgets", []):
+                cap = 10 ** 6
+                if str(self.cfg.get("overlay_style") or "dialog") == "dialog":
+                    # 历史最多占四成，其余留给当前句
+                    cap = int(self._dialog_h() * 0.42)
+                items = getattr(self, "_hist_widgets", [])
+                heights = []
+                for w in items:
                     v = w.layout()
+                    hh = 0
                     if v is not None:
                         for i in range(v.count()):
                             lab = v.itemAt(i).widget()
@@ -6109,13 +6115,23 @@ class Overlay:
                                 lab.setFixedHeight(self._text_height(lab, inner))
                         v.invalidate()
                         v.activate()
-                        w.setFixedHeight(v.sizeHint().height())
-                        total += w.height()
-                if total:
-                    total += self._hist_lay.spacing() * max(0, len(self._hist_widgets) - 1)
-                # 对话框高度是固定的：历史区最多占一半，剩下的留给当前句，免得把正文挤没
-                if str(self.cfg.get("overlay_style") or "dialog") == "dialog":
-                    total = min(total, int(self._dialog_h() * 0.42))
+                        hh = v.sizeHint().height()
+                    heights.append(hh)
+                # 从最新的（列表末尾）往前排：放不下就整条不显示。
+                # 以前是把总高 min() 到一个上限，条目本身仍按全高画，于是压到当前句上重叠。
+                total, keep = 0, []
+                for hh in reversed(heights):
+                    need = hh + (self._hist_lay.spacing() if keep else 0)
+                    if total + need > cap:
+                        break
+                    total += need
+                    keep.append(hh)
+                n_keep = len(keep)
+                for idx, w in enumerate(items):
+                    vis = idx >= len(items) - n_keep
+                    w.setVisible(vis)
+                    if vis:
+                        w.setFixedHeight(max(0, heights[idx]))
                 self.hist_box.setFixedHeight(max(0, total))
             self.panel.layout().invalidate()
             self.panel.layout().activate()
