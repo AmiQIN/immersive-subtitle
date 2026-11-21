@@ -3656,7 +3656,10 @@ class Overlay:
         self.spk_label.setVisible(False)
         lay.addWidget(self.spk_label, 0, self.Qt.AlignLeft)
 
-        self.btn_pause = QPushButton("开始")
+        # 常驻在字幕条下沿的捕获开关，文案由主程序按三态同步
+        self.btn_pause = QPushButton("开始捕获")
+        self.btn_pause.setObjectName("fav")
+        self.btn_pause.setMinimumWidth(78)
         self.btn_settings = QPushButton("设置")
         # 字幕条上的这颗按钮只收字幕，不退出程序：它常驻在游戏上层，
         # 原来写「关闭」却直接退整个应用，误触一次识别就全停了。退出走托盘。
@@ -3840,6 +3843,12 @@ class Overlay:
         self._frozen = False        # 鼠标悬停时冻结换句，方便慢慢读
         self._status_backup = None
         self._cur_spk = ""          # 当前这句的说话人
+        # 冷启动还没有任何字幕：先收成一条操作条，等第一句进来再展开成完整对话框
+        try:
+            if not str(self.dst_label.text()).strip() and not self._hist:
+                self.set_compact(True)
+        except Exception:
+            pass
         self._cur_en = ""           # 当前这句的英文（对照模式下也用它做朗读/收藏）
         self._cur_zh = ""           # 当前这句的中文原文（换句时带进历史）
         self._cur_audio = None      # 当前这句的原始音频（收藏时切片）
@@ -4631,6 +4640,7 @@ class Overlay:
         self._render_history()
         self._shrunk_once = False
         self._fit_height()
+        self.set_compact(True)
         self.set_status("字幕流已清空", "ok")
         self._show_toast("已清空")
         log("清空字幕流")
@@ -5253,7 +5263,8 @@ class Overlay:
             from PySide6.QtGui import QCursor
             pos = QCursor.pos()
             inside = False
-            for b in (getattr(self, "btn_fav", None), getattr(self, "btn_read", None)):
+            for b in (getattr(self, "btn_pause", None), getattr(self, "btn_fav", None),
+                      getattr(self, "btn_read", None)):
                 if b is None or not b.isVisible():
                     continue
                 g = b.rect()
@@ -5279,7 +5290,8 @@ class Overlay:
             pass
 
     def _chrome(self):
-        return [self.btn_pause, self.btn_settings, self.btn_quit, self.chk_auto,
+        # 开始/暂停捕获常驻（见 _apply_mode_visuals），其余仍是交互模式才露
+        return [self.btn_settings, self.btn_quit, self.chk_auto,
                 self.tts_voice,
                 self.btn_loop,
                 self.btn_clear_q, self.btn_font_minus, self.btn_font_plus,
@@ -5292,8 +5304,8 @@ class Overlay:
                 w.setVisible(bool(on))
             except Exception:
                 pass
-        # ☆ 收藏 / 朗读 常驻底部：交互与否都露着，位置固定在下沿，不用到处找
-        for _b in (self.btn_fav, self.btn_read):
+        # 捕获开关 + ☆ 收藏 + 朗读 常驻底部：不用进交互模式，游戏里直接点
+        for _b in (self.btn_pause, self.btn_fav, self.btn_read):
             try:
                 _b.setVisible(True)
             except Exception:
@@ -5529,6 +5541,12 @@ class Overlay:
                 win = self.cfg.get("window") or {}
                 x = int(win.get("x") or (scr.left() + (scr.width() - w) // 2))
                 y = int(win.get("y") or (scr.bottom() - h - gap))
+                if getattr(self, "_compact", False):
+                    # 收起成一条时保持底边不往上跳，免得操作条悬在半空
+                    try:
+                        y = y + int(win.get("h") or h) - h
+                    except Exception:
+                        pass
                 self.win.move(x, y)
             else:
                 x = scr.left() + (scr.width() - w) // 2
@@ -5791,6 +5809,8 @@ class Overlay:
             except Exception:
                 pass
             self.dst_label.setText(main_txt)
+        if getattr(self, "_compact", False):
+            self.set_compact(False)
         self.dst_label.setProperty("sentence", en)
         self.dst_label.setProperty("zh", zh_new)
         try:
@@ -5903,9 +5923,20 @@ class Overlay:
         except Exception:
             h = 0
         w = max(480, w or self.win.width() or 640)
+        if getattr(self, "_compact", False):
+            # 没有字幕内容：只保留一条操作条的高度
+            return w, self._compact_h()
         if h < 160:
             h = self._dialog_h()
         return w, h
+
+    def _compact_h(self):
+        """收成一条时的高度：按钮行高 + 卡片内边距 + 投影余量。"""
+        try:
+            bar_h = int(self.top_bar_w.sizeHint().height())
+        except Exception:
+            bar_h = 24
+        return max(70, min(124, bar_h + self.MARGIN * 2 + 40))
 
     def _apply_geometry_lock(self):
         """对话框模式把窗口的最小 / 最大尺寸一并锁到固定几何。
@@ -5975,6 +6006,27 @@ class Overlay:
                         or (self.dst_label.toPlainText() or "").strip())
         except Exception:
             return True
+
+    def set_compact(self, on):
+        """没有字幕内容时，收成一条只有按钮的操作条；有句子进来再展开。"""
+        on = bool(on)
+        if on == bool(getattr(self, "_compact", False)):
+            return
+        self._compact = on
+        for w in (self.spk_label, self.src_label, self.dst_label, self.hist_box, self.divider):
+            try:
+                if (w is self.src_label) and not on:
+                    w.setVisible(bool(self.cfg.get("show_source", True)))
+                else:
+                    w.setVisible(not on)
+            except Exception:
+                pass
+        try:
+            # 尺寸必须走 _fixed_geometry / _apply_geometry_lock，手动 setFixedHeight
+            # 会被之后的 apply_position 按旧档位（276）又撑回去。
+            self.apply_position(save=False)
+        except Exception as e:
+            log("字幕条收合失败：" + repr(e))
 
     def _fit_height(self):
         """把卡片量准；对话框模式下窗口高度恒定，不再随句子长短上下跳。"""
@@ -10481,8 +10533,12 @@ class MainWindow:
 
     def _rename_session(self):
         txt = self.lbl_session.text().strip()
-        if " · 20" in txt:
-            txt = txt.split(" · 20")[0]
+        if txt.startswith("上一场："):
+            txt = txt[len("上一场："):]
+        for sep in (" · 本次 ", " · 20"):
+            if sep in txt:
+                txt = txt.split(sep)[0]
+        txt = txt.strip()
         self.cfg["session_name"] = txt
         save_config(self.cfg)
         self._sync_capture_ui()
@@ -10515,8 +10571,24 @@ class MainWindow:
         scene = SCENE_SHORT.get(str(self.cfg.get("scene") or ""), "未标注")
         custom = str(self.cfg.get("session_name") or "").strip()
         head = custom or ("本会话 · %s" % scene)
-        if not self.lbl_session.hasFocus():
-            self.lbl_session.setText("%s · %s" % (head, time.strftime("%Y-%m-%d %H:%M")))
+        # 时间只标「本次这一场」开始的时刻；未开始时明确写成「上一场」，
+        # 别把上次会话的名字顶在正在录的位置上。
+        # 旧写法用 hasFocus() 判「别覆盖用户输入」，可控件只要恰巧有焦点就永远跳过，
+        # 标签于是冻结在 2026-11-19 23:35，看着像一直挂在 APEX 组排。
+        if running and not paused and not getattr(self, "_sess_t0", None):
+            self._sess_t0 = time.strftime("%Y-%m-%d %H:%M")
+        editing = self.lbl_session.hasFocus() and self.lbl_session.isModified()
+        if not editing:
+            t0 = getattr(self, "_sess_t0", None)
+            if t0:
+                self.lbl_session.setText("%s · 本次 %s" % (head, t0[11:16]))
+            elif custom:
+                self.lbl_session.setText("上一场：%s" % custom)
+                self.lbl_session.setToolTip(
+                    "这是上一场会话的名字，存在配置里所以重启还在。"
+                    "点一下改成这次的名字，回车生效；开始捕获后会自动标本次时间。")
+            else:
+                self.lbl_session.setText(head)
         if hasattr(self, "top_session"):
             self.top_session.setText("会话：%s" % scene)
         if hasattr(self, "top_pair"):
@@ -13476,7 +13548,7 @@ class App:
         self.capture = AudioCapture(self.cfg, self.seg_q, self._audio_state)
         self.capture.start()
         try:
-            self.overlay.btn_pause.setText("暂停")
+            self.overlay.btn_pause.setText("暂停捕获")
         except Exception:
             pass
         try:
@@ -13529,7 +13601,7 @@ class App:
             self.capture.stop()
             self.capture = None
         try:
-            self.overlay.btn_pause.setText("开始")
+            self.overlay.btn_pause.setText("开始捕获")
         except Exception:
             pass
         try:
@@ -13544,7 +13616,7 @@ class App:
             self.paused = False
             self.start_capture()
             self.overlay.set_status("收听中", "ok")
-            self.overlay.btn_pause.setText("暂停")
+            self.overlay.btn_pause.setText("暂停捕获")
             self.main.set_status("收听中", "ok")
             try:
                 self.main._sync_capture_ui()
@@ -13555,14 +13627,14 @@ class App:
             self.paused = False
             self.start_capture()
             self.overlay.set_status("已恢复收听", "ok")
-            self.overlay.btn_pause.setText("暂停")
+            self.overlay.btn_pause.setText("暂停捕获")
             self.main.set_status("已恢复收听", "ok")
             self.main.btn_pause.setText("暂停")
         else:
             self.paused = True
             self.stop_capture()
             self.overlay.set_status("已暂停", "")
-            self.overlay.btn_pause.setText("继续")
+            self.overlay.btn_pause.setText("继续捕获")
             self.main.set_status("已暂停", "")
             self.main.btn_pause.setText("继续")
         try:
