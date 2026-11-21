@@ -286,6 +286,9 @@ DEFAULT_CONFIG = {
     "idle_pause": 12,                   # 多久没语音就暂停刷新字幕（0 = 不暂停）
     "style_preset": "game",
     "theme": "dark",                    # light / dark；暗色为游戏场景优先             # 字幕样式预设 game / film / minimal / custom
+    "theme_custom_colors": {            # 软件皮肤「自定义配色」的四个基准色
+        "bg": "#F5EFE3", "card": "#FFFBF2", "text": "#3B342A", "accent": "#2F7D6D",
+    },
     "style_profiles": {
         "game": {"font_size": 24, "opacity": 0.92, "scroll_rows": 10, "anchor": "bottom"},
         "film": {"font_size": 26, "opacity": 0.82, "scroll_rows": 10, "anchor": "upper"},
@@ -396,22 +399,6 @@ OVERLAY_SKINS = {    # 默认：深色半透明卡片，微圆角，白字（现
         main="#FBEBD2", sub="#D9BC93",
         hist="#E8D3B4", hist_sub="#BFA681",
         align="left", badge_bg=(222, 160, 84, 26), badge_fg="#D9BC93"),
-    # 自定义颜色：纯白底上换色，颜色全从 cfg 里取（见 skin_of）
-    "custom_color": dict(
-        name="自定义颜色（自己配一套）", bg=(255, 255, 255), radius=14,
-        edge=(0, 0, 0), edge_alpha=70,
-        main="#23232A", sub="#6B6760",
-        hist="#3F3D38", hist_sub="#57524A",
-        align="left", badge_bg=(0, 0, 0, 18), badge_fg="#5A564F",
-        custom="color"),
-    # 自定义图片：把自己传的图当底，文字颜色按图片明暗自动配
-    "custom_image": dict(
-        name="自定义图片（上传图片当底）", bg=(16, 18, 22), radius=16,
-        edge=None, edge_alpha=0,
-        main="#FFFFFF", sub="#E4DED4",
-        hist="#EFEAE2", hist_sub="#CEC7BD",
-        align="left", badge_bg=(0, 0, 0, 40), badge_fg="#E4DED4",
-        custom="image"),
 }
 
 
@@ -7164,11 +7151,10 @@ def build_settings(owner, embedded=False):
     row3d.addWidget(skin_box, 1)
     root.addLayout(row3d)
 
-    skin_tip = QLabel("下拉最下面两项是自定义：选「自定义颜色」在纯白底上自己配色，"
-                      "选「自定义图片」传一张自己的图当字幕底。")
-    skin_tip.setStyleSheet("color:#8C8781;font-size:11px;")
-    skin_tip.setWordWrap(True)
-    root.addWidget(skin_tip)
+    skin_hint = QLabel("只改字幕条的外观，不动采集和翻译。软件本身的配色在下面「软件皮肤」里。")
+    skin_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    skin_hint.setWordWrap(True)
+    root.addWidget(skin_hint)
 
     def _preview_skin():
         k = str(skin_box.currentData() or "dialog_dark")
@@ -7181,190 +7167,119 @@ def build_settings(owner, embedded=False):
         except Exception as e:
             log("切换字幕皮肤失败：" + repr(e))
         save_config(cfg)
-        try:
-            _sync_custom_ui()
-        except Exception:
-            pass
     skin_box.currentIndexChanged.connect(lambda _i: _preview_skin())
 
-    # ---------------- 自定义皮肤：自己配颜色 / 自己传图 ----------------
-    def _push_skin():
-        """把自定义皮肤的几个值同步进悬浮条并立刻重画，不用等保存。"""
-        try:
-            ovc = owner.overlay.cfg
-            for k2 in ("overlay_skin", "overlay_cc_bg", "overlay_cc_text",
-                       "overlay_cc_sub", "overlay_skin_img", "overlay_skin_dim",
-                       "overlay_skin_radius"):
-                ovc[k2] = cfg.get(k2)
-            owner.overlay.update_look()
-            owner.overlay._render_history()
-            owner.overlay._fit_height()
-        except Exception as e:
-            log("自定义皮肤生效失败：" + repr(e))
-        save_config(cfg)
+    # ---------------- 软件皮肤：整窗自定义配色 ----------------
+    srow = QHBoxLayout()
+    srow.addWidget(QLabel("软件皮肤"))
+    app_skin = QComboBox()
+    for _k in THEME_ORDER:
+        app_skin.addItem(THEME_LABELS.get(_k, _k), _k)
+    for i in range(app_skin.count()):
+        if str(app_skin.itemData(i)) == str(cfg.get("theme") or "dark"):
+            app_skin.setCurrentIndex(i)
+    app_skin.setToolTip("整窗配色：背景 / 卡片 / 文字 / 强调色，换了立刻生效")
+    srow.addWidget(app_skin, 1)
+    root.addLayout(srow)
 
-    def _swatch(key, default):
-        """一个色块按钮：显示当前颜色，点一下弹调色板。"""
-        btn = QPushButton()
-        btn.setFixedHeight(26)
-        btn.setMinimumWidth(96)
-        btn.setCursor(getattr(Qt, "PointingHandCursor", 13))
+    cus_row = QWidget()
+    cus_lay = QHBoxLayout(cus_row)
+    cus_lay.setContentsMargins(0, 0, 0, 0)
+    cus_lay.setSpacing(8)
+
+    def _theme_colors():
+        d = cfg.get("theme_custom_colors")
+        if not isinstance(d, dict):
+            d = {}
+        for _kk, _dd in (("bg", "#F5EFE3"), ("card", "#FFFBF2"),
+                         ("text", "#3B342A"), ("accent", "#2F7D6D")):
+            d.setdefault(_kk, _dd)
+        cfg["theme_custom_colors"] = d
+        return d
+
+    def _take_effect():
+        try:
+            owner.main._apply_theme("custom")
+        except Exception as _e:
+            log("应用自定义配色失败：" + repr(_e))
+
+    _swatches = []
+
+    def _swatch2(label, key, default):
+        cus_lay.addWidget(QLabel(label))
+        b = QPushButton()
+        b.setFixedHeight(26)
+        b.setMinimumWidth(96)
+        b.setCursor(getattr(Qt, "PointingHandCursor", 13))
+        cus_lay.addWidget(b)
 
         def _paint():
-            c = str(cfg.get(key) or default)
+            c = str(_theme_colors().get(key) or default)
             try:
-                light_c = (sum(hex_rgb(c)) / 3.0) > 150
+                _light = (sum(hex_rgb(c)) / 3.0) > 150
             except Exception:
-                light_c = True
-            btn.setText(c)
-            btn.setStyleSheet(
+                _light = True
+            b.setText(c)
+            b.setStyleSheet(
                 "QPushButton{background:%s;color:%s;border:1px solid rgba(0,0,0,55);"
                 "border-radius:6px;font-size:11px;}"
-                % (c, "#141414" if light_c else "#FFFFFF"))
+                % (c, "#141414" if _light else "#FFFFFF"))
 
         def _pick():
             from PySide6.QtWidgets import QColorDialog
             from PySide6.QtGui import QColor
-            c0 = QColor(str(cfg.get(key) or default))
+            c0 = QColor(str(_theme_colors().get(key) or default))
             pickd = QColorDialog.getColor(c0, None, "选一个颜色")
             if pickd.isValid():
-                cfg[key] = pickd.name().upper()
+                _theme_colors()[key] = pickd.name().upper()
                 _paint()
-                _push_skin()
+                cfg["theme"] = "custom"
+                _take_effect()
 
         _paint()
-        btn.clicked.connect(_pick)
-        return btn, _paint
+        b.clicked.connect(_pick)
+        _swatches.append((b, _paint))
+        return b
 
-    cust_box = QWidget()
-    cust_lay = QVBoxLayout(cust_box)
-    cust_lay.setContentsMargins(0, 2, 0, 2)
-    cust_lay.setSpacing(6)
-    root.addWidget(cust_box)
+    _swatch2("背景", "bg", "#F5EFE3")
+    _swatch2("卡片", "card", "#FFFBF2")
+    _swatch2("文字", "text", "#3B342A")
+    _swatch2("强调", "accent", "#2F7D6D")
 
-    cc_row = QWidget()
-    cc_lay = QHBoxLayout(cc_row)
-    cc_lay.setContentsMargins(0, 0, 0, 0)
-    cc_lay.setSpacing(8)
-    cc_lay.addWidget(QLabel("底色"))
-    sw_bg, _rp1 = _swatch("overlay_cc_bg", "#FFFFFF")
-    cc_lay.addWidget(sw_bg)
-    cc_lay.addWidget(QLabel("字幕"))
-    sw_txt, _rp2 = _swatch("overlay_cc_text", "#23232A")
-    cc_lay.addWidget(sw_txt)
-    cc_lay.addWidget(QLabel("副行"))
-    sw_sub, _rp3 = _swatch("overlay_cc_sub", "#6B6760")
-    cc_lay.addWidget(sw_sub)
+    def _reset_skin_colors():
+        cfg["theme_custom_colors"] = {"bg": "#F5EFE3", "card": "#FFFBF2",
+                                      "text": "#3B342A", "accent": "#2F7D6D"}
+        for _b2, _p2 in _swatches:
+            _p2()
+        cfg["theme"] = "custom"
+        _take_effect()
 
-    def _reset_cc():
-        cfg["overlay_cc_bg"] = "#FFFFFF"
-        cfg["overlay_cc_text"] = "#23232A"
-        cfg["overlay_cc_sub"] = "#6B6760"
-        _rp1(), _rp2(), _rp3()
-        _push_skin()
-    btn_cc_reset = QPushButton("恢复白底黑字")
-    btn_cc_reset.clicked.connect(_reset_cc)
-    cc_lay.addWidget(btn_cc_reset)
-    cc_lay.addStretch(1)
-    cust_lay.addWidget(cc_row)
+    btn_skin_reset = QPushButton("恢复默认配色")
+    btn_skin_reset.clicked.connect(_reset_skin_colors)
+    cus_lay.addWidget(btn_skin_reset)
+    cus_lay.addStretch(1)
+    root.addWidget(cus_row)
 
-    img_row = QWidget()
-    im_lay = QHBoxLayout(img_row)
-    im_lay.setContentsMargins(0, 0, 0, 0)
-    im_lay.setSpacing(8)
-    img_lbl = QLabel()
-    img_lbl.setStyleSheet("color:#6E6A63;font-size:11px;")
+    skin2_hint = QLabel("「自定义配色」可以自己选背景、卡片、文字和强调色，换完立刻全局生效；"
+                        "其余六套是成品皮肤，直接选就行。")
+    skin2_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    skin2_hint.setWordWrap(True)
+    root.addWidget(skin2_hint)
 
-    def _sync_img_label():
-        p = str(cfg.get("overlay_skin_img") or "")
-        img_lbl.setText(("已选：" + Path(p).name) if p else "还没选图：随便一张壁纸 / 立绘 / 纹理都行")
+    def _sync_skin_ui():
+        cus_row.setVisible(str(app_skin.currentData() or "") == "custom")
 
-    def _pick_img():
-        from PySide6.QtWidgets import QFileDialog
-        f, _ = QFileDialog.getOpenFileName(
-            None, "选一张图当字幕底", str(ROOT), "图片 (*.png *.jpg *.jpeg *.webp *.bmp *.gif)")
-        if f:
-            cfg["overlay_skin_img"] = f
-            _sync_img_label()
-            _push_skin()
-            try:
-                owner.set_status("字幕皮肤已换成这张图：%s" % Path(f).name, "ok")
-            except Exception:
-                pass
+    def _pick_app_skin():
+        _k2 = str(app_skin.currentData() or "dark")
+        try:
+            owner.main._apply_theme(_k2)
+        except Exception as _e:
+            log("换软件皮肤失败：" + repr(_e))
+        _sync_skin_ui()
 
-    btn_img = QPushButton("选择图片…")
-    btn_img.clicked.connect(_pick_img)
-    btn_clear_img = QPushButton("清除")
+    app_skin.currentIndexChanged.connect(lambda _i: _pick_app_skin())
+    _sync_skin_ui()
 
-    def _clear_img():
-        cfg["overlay_skin_img"] = ""
-        _sync_img_label()
-        _push_skin()
-    btn_clear_img.clicked.connect(_clear_img)
-    im_lay.addWidget(btn_img)
-    im_lay.addWidget(btn_clear_img)
-    im_lay.addWidget(img_lbl, 1)
-    cust_lay.addWidget(img_row)
-
-    img_tune = QWidget()
-    it_lay = QHBoxLayout(img_tune)
-    it_lay.setContentsMargins(0, 0, 0, 0)
-    it_lay.setSpacing(8)
-    it_lay.addWidget(QLabel("压暗"))
-    dim_slider = QSlider(Qt.Horizontal)
-    dim_slider.setRange(0, 90)
-    dim_slider.setValue(int(cfg.get("overlay_skin_dim") or 35))
-    dim_slider.setFixedWidth(120)
-    it_lay.addWidget(dim_slider)
-    dim_val = QLabel("%d%%" % dim_slider.value())
-    dim_val.setStyleSheet("color:#8C8781;font-size:11px;")
-    it_lay.addWidget(dim_val)
-    it_lay.addSpacing(10)
-    it_lay.addWidget(QLabel("圆角"))
-    rad_slider = QSlider(Qt.Horizontal)
-    rad_slider.setRange(0, 48)
-    rad_slider.setValue(int(cfg.get("overlay_skin_radius") or 16))
-    rad_slider.setFixedWidth(100)
-    it_lay.addWidget(rad_slider)
-    rad_val = QLabel("%d px" % rad_slider.value())
-    rad_val.setStyleSheet("color:#8C8781;font-size:11px;")
-    it_lay.addWidget(rad_val)
-    it_lay.addStretch(1)
-    cust_lay.addWidget(img_tune)
-
-    def _on_dim(v):
-        cfg["overlay_skin_dim"] = int(v)
-        dim_val.setText("%d%%" % int(v))
-        _push_skin()
-
-    def _on_rad(v):
-        cfg["overlay_skin_radius"] = int(v)
-        rad_val.setText("%d px" % int(v))
-        _push_skin()
-    dim_slider.valueChanged.connect(_on_dim)
-    rad_slider.valueChanged.connect(_on_rad)
-
-    cc_hint = QLabel("自定义颜色：在纯白底上换色，字幕和副行各选一个色；皮肤下拉里选「自定义颜色」。")
-    cc_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    cc_hint.setWordWrap(True)
-    im_hint = QLabel("自定义图片：图会按字幕条宽度铺满、自动加圆角；压暗越高白字越清楚，越低越透出原图。")
-    im_hint.setStyleSheet("color:#8C8781;font-size:11px;")
-    im_hint.setWordWrap(True)
-    cust_lay.addWidget(cc_hint)
-    cust_lay.addWidget(im_hint)
-
-    def _sync_custom_ui():
-        k = str(skin_box.currentData() or "")
-        is_cc = k == "custom_color"
-        is_img = k == "custom_image"
-        cc_row.setVisible(is_cc)
-        cc_hint.setVisible(is_cc)
-        img_row.setVisible(is_img)
-        img_tune.setVisible(is_img)
-        im_hint.setVisible(is_img)
-        _sync_img_label()
-    _sync_img_label()
-    _sync_custom_ui()
     pos_hint = QLabel("默认底部居中、离任务栏 72px；交互模式下拖动字幕条，靠近中线 / 底部会自动吸附，松手记住。")
     pos_hint.setStyleSheet("color:#8C8781;font-size:11px;")
     pos_hint.setWordWrap(True)
@@ -8950,6 +8865,59 @@ THEME_LABELS = {
 }
 THEME_ORDER = ["dark", "light", "graphite", "ocean", "paper", "contrast"]
 
+
+def _mix_hex(a, b, t):
+    """两个颜色按比例混一混：边框 / 悬停 / 次要文字这些没让用户手选的颜色都这样派生。"""
+    try:
+        ra, ga, ba = hex_rgb(a)
+        rb, gb, bb = hex_rgb(b)
+        return "#%02X%02X%02X" % tuple(
+            max(0, min(255, int(x + (y - x) * t)))
+            for x, y in zip((ra, ga, ba), (rb, gb, bb)))
+    except Exception:
+        return a
+
+
+def build_custom_theme(cfg):
+    """软件皮肤「自定义配色」：用户只挑四个基准色，整块色板按明暗自动派生，
+    直接写回 THEME_COLORS / THEME_STYLE，别处的 tcol() 和 theme_qss() 照旧读得到。"""
+    d = cfg.get("theme_custom_colors")
+    if not isinstance(d, dict):
+        d = {}
+    bg = str(d.get("bg") or "#F5EFE3")
+    card = str(d.get("card") or "#FFFBF2")
+    text = str(d.get("text") or "#3B342A")
+    accent = str(d.get("accent") or "#2F7D6D")
+    bright = (sum(hex_rgb(text)) / 3.0) > 150          # 亮字 = 深色底
+    pal = dict(THEME_COLORS.get("paper") or THEME_COLORS["dark"])
+    pal.update({
+        "bg": bg, "card": card,
+        "nav": _mix_hex(bg, card, 0.40),
+        "border": _mix_hex(bg, text, 0.20),
+        "text": text,
+        "muted": _mix_hex(text, bg, 0.42),
+        "chip_bg": _mix_hex(bg, text, 0.07),
+        "field": card,
+        "field_border": _mix_hex(bg, text, 0.24),
+        "hover": _mix_hex(bg, text, 0.10),
+        "header": _mix_hex(bg, card, 0.55),
+        "grid": _mix_hex(bg, text, 0.14),
+        "sel": _mix_hex(card, accent, 0.20),
+        "accent": accent,
+        "accent_hover": (_mix_hex(accent, "#FFFFFF", 0.28) if bright
+                         else _mix_hex(accent, "#000000", 0.18)),
+        "ok": "#3FC7A6" if bright else "#3E8E5A",
+        "warn": "#D9A24A" if bright else "#B57A1E",
+        "err": "#F07A7A" if bright else "#C0503F",
+        "btn_text": "#FFFFFF" if bright else _mix_hex(text, bg, 0.10),
+    })
+    THEME_COLORS["custom"] = pal
+    THEME_STYLE["custom"] = dict(THEME_STYLE.get("paper") or THEME_STYLE["light"])
+    THEME_LABELS["custom"] = "自定义配色"
+    if "custom" not in THEME_ORDER:
+        THEME_ORDER.append("custom")
+    return pal
+
 # 风格不只是换颜色：圆角、边线、字号、标题字体一起变，六套才有明显区别
 THEME_STYLE = {
     "dark":     {"radius": 8,  "card_border": 1, "title": 22, "font": "Microsoft YaHei UI",
@@ -8965,6 +8933,12 @@ THEME_STYLE = {
     "contrast": {"radius": 0,  "card_border": 2, "title": 26, "font": "Microsoft YaHei UI",
                  "card_pad": 12, "tag": "硬边 · 高对比"},
 }
+
+# 「自定义配色」先占个位：不选它的时候菜单里也要能看到，选中后再按用户四色重建
+THEME_LABELS["custom"] = "自定义配色"
+THEME_STYLE["custom"] = dict(THEME_STYLE["paper"])
+THEME_COLORS["custom"] = dict(THEME_COLORS["paper"])
+THEME_ORDER.append("custom")
 
 
 def theme_style(theme):
@@ -12929,6 +12903,11 @@ class MainWindow:
         self._apply_theme(self.lab_theme.currentData() or "dark", sync_lab=False)
 
     def _apply_theme(self, theme, sync_lab=True):
+        if theme == "custom":
+            try:
+                build_custom_theme(self.cfg)
+            except Exception as e:
+                log("生成自定义配色失败：" + repr(e))
         if theme not in THEME_COLORS:
             return
         self.cfg["theme"] = theme
@@ -15298,6 +15277,12 @@ def main():
         # 已经有实例：把它的窗口抬起来，然后静默退出，不弹任何提示
         activate_existing()
         os._exit(0)
+    if str(cfg.get("theme") or "") == "custom":
+        # 启动就要用自定义配色：先按存好的四色把色板派生出来，再建界面
+        try:
+            build_custom_theme(cfg)
+        except Exception as e:
+            log("启动时生成自定义配色失败：" + repr(e))
     housekeeping(int(cfg.get("keep_days") or 0))     # 压缩旧记录、按需清理
     App(cfg).run()
 
