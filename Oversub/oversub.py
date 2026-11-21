@@ -9222,13 +9222,15 @@ class MainWindow:
         lrow = QHBoxLayout()
         lrow.addWidget(QLabel("视图"))
         self.lib_view = QComboBox()
-        self.lib_view.addItems(["时序", "卡片复习", "语义聚类", "会话", "说话人"])
+        # 只留最常用的时序视图：卡片复习 / 语义聚类 / 会话 / 说话人 四个视图平时用不到，
+        # 摆在最显眼的第一个下拉里反而让人以为这页很复杂
+        self.lib_view.addItems(["时序"])
         lrow.addWidget(self.lib_view)
         self.lib_search = QLineEdit()
         self.lib_search.setPlaceholderText("搜源文本 / 目标译文 / 标签…")
         self.lib_search.setClearButtonEnabled(True)
         lrow.addWidget(self.lib_search, 1)
-        self.lib_due = QLabel("待复习 0")
+        self.lib_due = QLabel("共 0 条")
         self.lib_due.setObjectName("chip")
         lrow.addWidget(self.lib_due)
         self.btn_lib_filter = QPushButton("筛选")
@@ -9267,6 +9269,28 @@ class MainWindow:
         self.btn_lib_import.clicked.connect(self.lib_import)
         lfilter.addWidget(self.btn_lib_import)
         lfilter.addStretch(1)
+        # 选中一行就能直接动手。这些动作以前只藏在右键菜单和详情卡里，
+        # 表格看着像纯只读日志，所以总觉得「没用」。
+        for _txt, _tip, _fn in (
+                ("▶ 朗读", "用系统语音读选中这行的译文", self.lib_play_selected),
+                ("☆ 收藏", "把选中这行存进收藏，字幕条里也能翻回来", self.lib_fav_selected),
+                ("语境", "听这一句的上下文：上一句 → 本句 → 下一句", self.lib_ctx_selected),
+                ("删除", "删掉选中这条素材（会二次确认）", self.lib_del_selected)):
+            _b = QPushButton(_txt)
+            _b.setCursor(Qt.PointingHandCursor)
+            _b.setFixedHeight(28)
+            _b.setEnabled(False)
+            _b.setToolTip(_tip)
+            _b.clicked.connect(_fn)
+            lfilter.addWidget(_b)
+            if _txt.startswith("▶"):
+                self.lib_btn_play = _b
+            elif _txt.startswith("☆"):
+                self.lib_btn_fav = _b
+            elif _txt.startswith("语境"):
+                self.lib_btn_ctx = _b
+            else:
+                self.lib_btn_del = _b
         lbv.addLayout(lfilter)
         # 高级筛选默认收起：只留语种对、场景两个常用条件
         self._lib_adv_filters = [self.lib_state, self.lib_quality, self.lib_chk_fav,
@@ -9278,14 +9302,20 @@ class MainWindow:
 
         self.lib_stack = QStackedWidget()
         # 1) 时序
-        self.lib_time = QTableWidget(0, 5)
-        self.lib_time.setHorizontalHeaderLabels(["时间", "源文本", "目标译文", "说话人", "记忆状态"])
+        self.lib_time = QTableWidget(0, 4)
+        self.lib_time.setHorizontalHeaderLabels(["时间", "源文本", "目标译文", "说话人"])
         self.lib_time.verticalHeader().setVisible(False)
         self.lib_time.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.lib_time.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.lib_time.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.lib_time.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.lib_time.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.lib_time.setWordWrap(True)
+        self.lib_time.setColumnWidth(0, 96)
+        self.lib_time.setColumnWidth(3, 96)
+        # 点一行就能用工具栏那几个按钮；双击直接朗读这一句
+        self.lib_time.itemSelectionChanged.connect(self._lib_ops_state)
+        self.lib_time.itemDoubleClicked.connect(lambda *_: self.lib_play_selected())
 
         # 2) 卡片复习
         cardp = QWidget()
@@ -11117,10 +11147,8 @@ class MainWindow:
         self.lib_scene.blockSignals(False)
 
         self._lib_rows = self._lib_filtered(recs)
-        due = sum(1 for u in self._lib_rows if self._lib_state_of(u, recs) == "待复习")
-        new_n = sum(1 for u in self._lib_rows if self._lib_state_of(u, recs) == "新")
-        self.lib_due.setText("待复习 %d · 新 %d · 共 %d" % (
-            due, new_n, len(self._lib_rows)))
+        self.lib_due.setText("共 %d 条" % len(self._lib_rows))
+        self._lib_ops_state()
         view = self.lib_view.currentIndex()
         if not self._lib_rows:
             self.lib_stack.setCurrentIndex(5)      # 空状态页：引导去 Capture
@@ -11198,9 +11226,16 @@ class MainWindow:
             u = self._lib_rows[i]
             self.lib_time.insertRow(i)
             for j, v in enumerate((u["created_at"], u["source_text"], u["target_text"],
-                                   u["speaker_id"], self._lib_state_of(u, recs))):
+                                   u["speaker_id"])):
                 self.lib_time.setItem(i, j, QTableWidgetItem(str(v)))
         self._lib_tl_loaded = end
+        # 进来就落在第一行上：工具栏那几个按钮立刻是亮的，不用先猜要点哪里
+        try:
+            if self.lib_time.rowCount() and not self.lib_time.selectionModel().hasSelection():
+                self.lib_time.selectRow(0)
+        except Exception:
+            pass
+        self._lib_ops_state()
 
     def _lib_timeline_more(self, _v=None):
         bar = self.lib_time.verticalScrollBar()
@@ -11370,6 +11405,85 @@ class MainWindow:
             self.owner.overlay.read_text(u["target_text"], lang=u.get("target_lang") or "en")
         except Exception as e:
             log("素材朗读失败：" + repr(e))
+
+    def _lib_op_row(self):
+        """工具栏操作的对象：优先选中行，其次表格当前行。"""
+        try:
+            rows = self._lib_bulk_rows()
+            if rows:
+                return rows[0]
+        except Exception:
+            pass
+        try:
+            r = self.lib_time.currentRow()
+            if 0 <= r < len(getattr(self, "_lib_rows", [])):
+                return self._lib_rows[r]
+        except Exception:
+            pass
+        return None
+
+    def _lib_ops_state(self, *_a):
+        """没选中行时四个操作按钮置灰，选中就亮起来，别让人猜能不能点。"""
+        on = False
+        if hasattr(self, "lib_time"):
+            try:
+                on = bool(self._lib_bulk_rows()) or self.lib_time.currentRow() >= 0
+            except Exception:
+                on = False
+        for name in ("lib_btn_play", "lib_btn_fav", "lib_btn_ctx", "lib_btn_del"):
+            b = getattr(self, name, None)
+            if b is not None:
+                b.setEnabled(on)
+
+    def lib_play_selected(self):
+        u = self._lib_op_row()
+        if not u:
+            self.set_status("先在表格里点一行，再点朗读", "warn")
+            return
+        try:
+            self.owner.overlay.read_text(u["target_text"], lang=u.get("target_lang") or "en")
+            self.set_status("朗读：%s" % (u["target_text"] or "")[:40], "ok")
+        except Exception as e:
+            log("素材朗读失败：" + repr(e))
+
+    def lib_fav_selected(self):
+        u = self._lib_op_row()
+        if not u:
+            self.set_status("先在表格里点一行，再点收藏", "warn")
+            return
+        try:
+            self.add_fav_line(u["created_at"], u["source_text"], u["target_text"],
+                              u.get("speaker_id") or "")
+        except Exception as e:
+            log("收藏素材失败：" + repr(e))
+            self.set_status("收藏失败：%s" % e, "warn")
+
+    def lib_ctx_selected(self):
+        u = self._lib_op_row()
+        if not u:
+            self.set_status("先在表格里点一行，再看语境", "warn")
+            return
+        try:
+            self._lib_idx = self._lib_rows.index(u)
+        except Exception:
+            pass
+        self.lib_context_play()
+
+    def lib_del_selected(self):
+        from PySide6.QtWidgets import QMessageBox
+        u = self._lib_op_row()
+        if not u:
+            self.set_status("先在表格里点一行，再点删除", "warn")
+            return
+        if QMessageBox.question(
+                self.win, "删除素材",
+                "删掉这一条？不可撤销。\n\n%s\n%s" % (u["source_text"], u["target_text"]),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        n = delete_history_entries(u["created_at"][:10],
+                                  [(u["created_at"], u["target_text"])])
+        self.refresh_library(force=True)
+        self.set_status("已删除 %d 条素材" % n, "ok" if n else "warn")
 
     def lib_add_word(self):
         if not self._lib_rows:
