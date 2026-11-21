@@ -399,6 +399,13 @@ OVERLAY_SKINS = {    # 默认：深色半透明卡片，微圆角，白字（现
         main="#FBEBD2", sub="#D9BC93",
         hist="#E8D3B4", hist_sub="#BFA681",
         align="left", badge_bg=(222, 160, 84, 26), badge_fg="#D9BC93"),
+    # 自定义颜色：底色 / 主字幕 / 副字幕三色自己定，其余几何沿用浅色卡片
+    "custom_color": dict(
+        name="自定义颜色", bg=(255, 255, 255), radius=16, custom="color",
+        edge=(0, 0, 0), edge_alpha=110,
+        main="#23232A", sub="#6B6760",
+        hist="#6B6760", hist_sub="#6B6760",
+        align="left", badge_bg=(0, 0, 0, 16), badge_fg="#6B6760"),
 }
 
 
@@ -7274,10 +7281,65 @@ def build_settings(owner, embedded=False):
     row3d.addWidget(skin_box, 1)
     root.addLayout(row3d)
 
-    skin_hint = QLabel("只改字幕条的外观，不动采集和翻译。软件本身的配色在下面「软件皮肤」里。")
+    skin_hint = QLabel("只改字幕条的外观，不动采集和翻译。软件本身的配色在下面「软件皮肤」里。"
+                       "选「自定义颜色」时可以自己点颜色。")
     skin_hint.setStyleSheet("color:#8C8781;font-size:11px;")
     skin_hint.setWordWrap(True)
     root.addWidget(skin_hint)
+
+    # 「自定义颜色」那一套：底色 / 主字幕 / 副字幕，点按钮弹拾色器，即时生效
+    cc_row = QHBoxLayout()
+    cc_lab = QLabel("自定义颜色")
+    cc_row.addWidget(cc_lab)
+
+    def _cc_paint(b, color):
+        bgv = hex_rgb(color, (255, 255, 255))
+        light = (sum(bgv) / 3.0) > 140
+        b.setStyleSheet(
+            "QPushButton{background:%s;color:%s;border:1px solid #CFC8BC;border-radius:6px;"
+            "padding:1px 12px;font-size:11px;}"
+            % (color, "#1E1E22" if light else "#FFFFFF"))
+
+    def _cc_apply(key, color):
+        cfg[key] = color
+        try:
+            owner.overlay.cfg[key] = color
+            owner.overlay.update_look()
+            owner.overlay._render_history()
+            owner.overlay._fit_height()
+        except Exception as e:
+            log("改字幕配色失败：" + repr(e))
+        save_config(cfg)
+
+    def _cc_pick(key, dflt, btn):
+        from PySide6.QtWidgets import QColorDialog
+        from PySide6.QtGui import QColor
+        c = QColorDialog.getColor(QColor(str(cfg.get(key) or dflt)),
+                                  root.parentWidget() or None, "字幕配色")
+        if not c.isValid():
+            return
+        col = c.name().upper()
+        _cc_apply(key, col)
+        _cc_paint(btn, col)
+
+    b_cc_bg = QPushButton("底色")
+    b_cc_tx = QPushButton("主字幕")
+    b_cc_su = QPushButton("副字幕")
+    for _b, (_k, _d) in ((b_cc_bg, ("overlay_cc_bg", "#FFFFFF")),
+                         (b_cc_tx, ("overlay_cc_text", "#23232A")),
+                         (b_cc_su, ("overlay_cc_sub", "#6B6760"))):
+        _b.setFixedHeight(26)
+        _b.setCursor(Qt.PointingHandCursor)
+        _cc_paint(_b, str(cfg.get(_k) or _d))
+        _b.clicked.connect(lambda _=False, k=_k, d=_d, bb=_b: _cc_pick(k, d, bb))
+        cc_row.addWidget(_b)
+    cc_row.addStretch(1)
+    root.addLayout(cc_row)
+
+    def _cc_enable():
+        on = str(skin_box.currentData() or "") == "custom_color"
+        for w in (cc_lab, b_cc_bg, b_cc_tx, b_cc_su):
+            w.setVisible(on)
 
     def _preview_skin():
         k = str(skin_box.currentData() or "dialog_dark")
@@ -7290,7 +7352,12 @@ def build_settings(owner, embedded=False):
         except Exception as e:
             log("切换字幕皮肤失败：" + repr(e))
         save_config(cfg)
+        try:
+            _cc_enable()
+        except Exception:
+            pass
     skin_box.currentIndexChanged.connect(lambda _i: _preview_skin())
+    _cc_enable()
 
     # ---------------- 软件皮肤：整窗自定义配色 ----------------
     srow = QHBoxLayout()
