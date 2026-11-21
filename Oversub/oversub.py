@@ -3674,6 +3674,15 @@ def split_words(text, lang="en"):
 
 
 # ---------------------------------------------------------------- 词典插件（可安装）
+def looks_cn(text):
+    """这段文字是中文吗：汉字占比够高就当中文，朗读时自动换成中文音色。"""
+    import re as _re
+    s = str(text or "")
+    n = len(_re.findall(r"[\u4e00-\u9fff]", s))
+    m = len(_re.findall(r"[A-Za-z]", s))
+    return n > 0 and n >= m
+
+
 DICT_PLUGIN_DIR = ROOT / "plugins" / "dict"
 
 # 插件就是「按这个语种的文字规则切词」的规则包：装到本地 plugins/dict/<语种>.json，
@@ -10050,8 +10059,7 @@ class MainWindow:
         self._lib_idx = 0
         self._lib_revealed = False
         self.btn_live_fav.clicked.connect(self.fav_current)
-        self.btn_live_speak.clicked.connect(
-            lambda: self.speak_row(self.live_tgt.text().replace("译：", "", 1)))
+        self.btn_live_speak.clicked.connect(self._speak_live_line)
         self.btn_live_tag.clicked.connect(self._pick_scene_tag)
         self._sync_capture_ui()
 
@@ -13891,16 +13899,64 @@ class MainWindow:
         return [self._row_data(r) for r in rows if self._row_data(r)]
 
     def speak_row(self, en):
-        """表格里的发音入口：点一下听这句英文，语速比对局慢读稍快一点。"""
+        """表格 / 首页「朗读」的发音入口：点一下听这句，语速比对局慢读稍快一点。"""
         text = str(en or "").strip()
-        if not text:
-            return
+        if not text or text in ("—", "-", "译：—"):
+            log("朗读跳过：没有可读的句子")
+            return False
         try:
             base = float(self.cfg.get("read_rate") or 0)
-            self.owner.overlay.read_text(text, rate=max(-10.0, min(10.0, base + 6)))
+            lang = "zh" if looks_cn(text) else str(self.cfg.get("target_lang") or "en")
+            self.owner.overlay.read_text(text, lang=lang,
+                                         rate=max(-10.0, min(10.0, base + 6)))
             self.set_status("朗读：%s" % text[:40], "ok")
+            return True
         except Exception as e:
             log("表格朗读失败：" + repr(e))
+            return False
+
+    def _speak_live_line(self):
+        """首页右上角的「朗读」：读当前这句；当前句空了才退到最近一条记录。
+        以前只认 live_tgt，它还是占位符「译：—」时会读出一段空音频（等于没声音）。"""
+        try:
+            cand = []
+            # 1) 当前字幕卡上真正显示的那句
+            try:
+                cand.append(str(self.cap_en.toPlainText() or ""))
+            except Exception:
+                pass
+            # 2) live_tgt（后台随句更新，界面上是隐藏的）
+            try:
+                t = str(self.live_tgt.text() or "")
+                for pre in ("译：", "译:", "译 "):
+                    if t.startswith(pre):
+                        t = t[len(pre):]
+                        break
+                cand.append(t)
+            except Exception:
+                pass
+            txt = ""
+            for c in cand:
+                c = str(c or "").strip()
+                if c and c not in ("—", "-", "译：—", "译："):
+                    txt = c
+                    break
+            if not txt:
+                try:
+                    if self.table.rowCount() > 0:
+                        d = self.table.item(0, 0).data(Qt.UserRole) or {}
+                        txt = str(d.get("en") or "").strip()
+                        if txt:
+                            log("朗读：当前句为空，改读最近一条记录")
+                except Exception:
+                    txt = ""
+            if not txt:
+                self.set_status("还没有能朗读的句子：等捕获到一句，或先在历史里选一条", "warn")
+                return
+            if not self.speak_row(txt):
+                self.set_status("这句读不了：%s" % txt[:30], "warn")
+        except Exception as e:
+            log("点朗读失败：" + repr(e))
 
     def batch_menu(self):
         from PySide6.QtWidgets import QMenu, QMessageBox
