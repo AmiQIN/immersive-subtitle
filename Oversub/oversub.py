@@ -202,7 +202,15 @@ DEFAULT_CONFIG = {
     "hold_scale": 1.0,
     "show_overlay": True,
     "overlay_pos": "top",         # bottom / bottom_high / top / free：字幕条出现的位置（默认顶部锚定）
-    "overlay_skin": "dialog_dark",  # 字幕皮肤：dialog_dark / galgame_light / atri / lyrics / cinema
+    "overlay_skin": "dialog_dark",  # 字幕皮肤：dialog_dark / galgame_light / atri / lyrics / cinema …
+    # 自定义颜色皮肤（overlay_skin=custom_color）：底色 / 主字幕 / 副字幕，纯白底上换色
+    "overlay_cc_bg": "#FFFFFF",
+    "overlay_cc_text": "#23232A",
+    "overlay_cc_sub": "#6B6760",
+    # 自定义图片皮肤（overlay_skin=custom_image）：用户自己传一张图当底
+    "overlay_skin_img": "",
+    "overlay_skin_dim": 35,       # 图片压暗程度 0–100，保证白字在花图上也能读清
+    "overlay_skin_radius": 16,    # 图片皮肤的圆角
     "overlay_style": "dialog",    # dialog = Galgame 对话框（高度恒定、底边死锁）｜ banner = 旧自适应条
     "overlay_dialog_h": 0,        # 对话框固定高度；0 = 按字号自动算（约 3 行正文）
     "overlay_gap_top": 8,         # 顶部锚定时离屏幕上沿的像素；调大可避开游戏 HUD
@@ -319,8 +327,7 @@ DEFAULT_CONFIG = {
 # ---------------------------------------------------------------- 字幕皮肤
 # 只影响外观（底色 / 描边 / 圆角 / 文字颜色 / 对齐），不动采集、翻译、历史等任何逻辑。
 # 加新皮肤：在下面加一条即可，渲染处按 key 取值，不用改别的地方。
-OVERLAY_SKINS = {
-    # 默认：深色半透明卡片，微圆角，白字（现有形态）
+OVERLAY_SKINS = {    # 默认：深色半透明卡片，微圆角，白字（现有形态）
     "dialog_dark": dict(
         name="深色卡片（默认）", bg=(16, 18, 22), radius=14,
         edge=(255, 255, 255), edge_alpha=None,
@@ -356,12 +363,171 @@ OVERLAY_SKINS = {
         main="#FFFFFF", sub="#D8D3C9",
         hist="#A9A49B", hist_sub="#9A958C",
         align="center", badge_bg=(255, 255, 255, 0), badge_fg="#8B8780"),
+    # 追加的几款经典样子，和自定义皮肤同一套渲染，不需要额外代码
+    "paper": dict(
+        name="纸质米黄（手账风）", bg=(250, 246, 236), radius=16,
+        edge=(198, 186, 166), edge_alpha=150,
+        main="#2B2620", sub="#5A5248",
+        hist="#4A4238", hist_sub="#6B6255",
+        align="left", badge_bg=(140, 120, 90, 22), badge_fg="#6B6255"),
+    "glass": dict(
+        name="磨砂玻璃（浅色半透）", bg=(252, 252, 252), radius=14,
+        edge=(255, 255, 255), edge_alpha=210,
+        main="#20242A", sub="#4C525A",
+        hist="#37404A", hist_sub="#5C636C",
+        align="left", badge_bg=(90, 110, 130, 20), badge_fg="#4C525A"),
+    "mono": dict(
+        name="纯黑白框（干净利落）", bg=(255, 255, 255), radius=2,
+        edge=(0, 0, 0), edge_alpha=90,
+        main="#111111", sub="#3A3A3A",
+        hist="#2A2A2A", hist_sub="#4A4A4A",
+        align="left", badge_bg=(0, 0, 0, 16), badge_fg="#3A3A3A"),
+    "neon": dict(
+        name="赛博霓虹（紫黑）", bg=(12, 9, 20), radius=12,
+        edge=(168, 120, 255), edge_alpha=110,
+        main="#F2EDFF", sub="#BCA9E8",
+        hist="#D6C8F5", hist_sub="#A696CC",
+        align="left", badge_bg=(168, 120, 255, 26), badge_fg="#BCA9E8"),
+    "amber": dict(
+        name="琥珀复古（暖黑橙边）", bg=(24, 17, 10), radius=12,
+        edge=(222, 160, 84), edge_alpha=105,
+        main="#FBEBD2", sub="#D9BC93",
+        hist="#E8D3B4", hist_sub="#BFA681",
+        align="left", badge_bg=(222, 160, 84, 26), badge_fg="#D9BC93"),
+    # 自定义颜色：纯白底上换色，颜色全从 cfg 里取（见 skin_of）
+    "custom_color": dict(
+        name="自定义颜色（自己配一套）", bg=(255, 255, 255), radius=14,
+        edge=(0, 0, 0), edge_alpha=70,
+        main="#23232A", sub="#6B6760",
+        hist="#3F3D38", hist_sub="#57524A",
+        align="left", badge_bg=(0, 0, 0, 18), badge_fg="#5A564F",
+        custom="color"),
+    # 自定义图片：把自己传的图当底，文字颜色按图片明暗自动配
+    "custom_image": dict(
+        name="自定义图片（上传图片当底）", bg=(16, 18, 22), radius=16,
+        edge=None, edge_alpha=0,
+        main="#FFFFFF", sub="#E4DED4",
+        hist="#EFEAE2", hist_sub="#CEC7BD",
+        align="left", badge_bg=(0, 0, 0, 40), badge_fg="#E4DED4",
+        custom="image"),
 }
+
+
+def hex_rgb(s, default=(255, 255, 255)):
+    """把 #RRGGBB / #RGB 解析成三元组；解析不了就给默认色，皮肤永不因配色文本崩掉。"""
+    try:
+        t = str(s).strip().lstrip("#")
+        if len(t) == 3:
+            t = "".join(c * 2 for c in t)
+        if len(t) >= 6:
+            return (int(t[0:2], 16), int(t[2:4], 16), int(t[4:6], 16))
+    except Exception:
+        pass
+    return default
+
+
+def _skin_cache_dir():
+    d = ROOT / "cache" / "skins"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def skin_image_path(src, dim=35, radius=16):
+    """把用户传的图缩放 + 压暗 + 切圆角，存成一张可直接铺在字幕条上的 png。
+    结果按（路径, 修改时间, 参数）缓存，改一次设置只算一次，不拖慢每帧刷新。"""
+    try:
+        import hashlib
+        from PySide6.QtGui import QImage, QPainter, QColor, QPainterPath
+        from PySide6.QtCore import Qt, QRectF
+        p = Path(str(src))
+        if not p.exists():
+            return ""
+        key = "%s|%d|%d|%d" % (p.name, int(p.stat().st_mtime), int(dim), int(radius))
+        h = hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
+        out = _skin_cache_dir() / ("skin_%s.png" % h)
+        if out.exists():
+            return str(out).replace("\\", "/")
+        img = QImage(str(p))
+        if img.isNull():
+            return ""
+        maxw, maxh = 1600, 480            # 字幕条最长 1200 多，1600 够用又不至于每次解码大图
+        if img.width() > maxw or img.height() > maxh:
+            img = img.scaled(maxw, maxh, Qt.KeepAspectRatioByExpanding,
+                             Qt.SmoothTransformation)
+        w, hh = img.width(), img.height()
+        canvas = QImage(w, hh, QImage.Format_ARGB32_Premultiplied)
+        canvas.fill(QColor(0, 0, 0, 0))
+        pt = QPainter(canvas)
+        pt.setRenderHint(QPainter.Antialiasing, True)
+        pt.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        r = max(0, min(int(radius), hh // 2))
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, w, hh), r, r)
+        pt.setClipPath(path)
+        pt.drawImage(0, 0, img)
+        d = max(0, min(100, int(dim)))
+        pt.fillRect(QRectF(0, 0, w, hh), QColor(0, 0, 0, int(255 * d / 100.0)))
+        pt.end()
+        canvas.save(str(out), "PNG")
+        return str(out).replace("\\", "/")
+    except Exception as e:
+        log("自定义图片皮肤处理失败：" + repr(e))
+        return ""
+
+
+def _img_is_light(path):
+    """图片大概亮不亮，决定默认用深字还是浅字。"""
+    try:
+        from PySide6.QtGui import QImage
+        from PySide6.QtCore import Qt
+        img = QImage(str(path))
+        if img.isNull():
+            return False
+        img = img.scaled(32, 32, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        total, n = 0, 0
+        for y in range(img.height()):
+            for x in range(img.width()):
+                c = img.pixelColor(x, y)
+                total += (c.red() + c.green() + c.blue()) / 3.0
+                n += 1
+        return (total / max(1, n)) > 150
+    except Exception:
+        return False
 
 
 def skin_of(cfg):
     key = str(cfg.get("overlay_skin") or "dialog_dark")
-    return key, OVERLAY_SKINS.get(key) or OVERLAY_SKINS["dialog_dark"]
+    sk = dict(OVERLAY_SKINS.get(key) or OVERLAY_SKINS["dialog_dark"])
+    if sk.get("custom") == "color":
+        # 纯白底上换色：底色、主字幕、副字幕三色都由用户定，其余沿用默认几何
+        bg = hex_rgb(cfg.get("overlay_cc_bg") or "#FFFFFF")
+        sk["bg"] = bg
+        sk["main"] = str(cfg.get("overlay_cc_text") or "#23232A")
+        sk["sub"] = str(cfg.get("overlay_cc_sub") or "#6B6760")
+        sk["hist"] = sk["sub"]
+        sk["hist_sub"] = sk["sub"]
+        sk["edge"] = (0, 0, 0) if sum(bg) / 3.0 > 150 else (255, 255, 255)
+        sk["badge_fg"] = sk["sub"]
+    elif sk.get("custom") == "image":
+        src = str(cfg.get("overlay_skin_img") or "")
+        dim = cfg.get("overlay_skin_dim")
+        rad = cfg.get("overlay_skin_radius")
+        img = skin_image_path(src, dim if dim is not None else 35,
+                              rad if rad is not None else 16) if src else ""
+        if img and Path(img).exists():
+            sk["img"] = img
+            sk["radius"] = 0            # 圆角已经在生成的 png 里切好了
+            if _img_is_light(img):
+                sk["main"], sk["sub"] = "#1E1E22", "#45434A"
+                sk["hist"], sk["hist_sub"] = "#33313A", "#55525C"
+                sk["badge_fg"] = "#45434A"
+        else:
+            # 还没传图：退成深色卡片，别留一个空壳
+            sk.update(OVERLAY_SKINS["dialog_dark"])
+    return key, sk
 
 
 def log(msg):
@@ -6284,7 +6450,11 @@ class Overlay:
             e = skin["edge"]
             edge = "border:1px solid rgba(%d,%d,%d,%d);" % (
                 e[0], e[1], e[2], min(255, int(edge_alpha)))
-        if skin.get("bg") is None:
+        if skin.get("img"):
+            # 自定义图片皮肤：图已压暗并切好圆角，直接铺满整条；不再叠描边和底色
+            background = 'border-image:url("%s") 0 0 0 0 stretch stretch;' % skin["img"]
+            edge = "border:none;"
+        elif skin.get("bg") is None:
             background = "background:transparent;"
         elif skin.get("grad"):
             # 歌词 / 电影字幕：上下淡出的软底，浅色壁纸上字也读得清，但不至于压成一块黑板
@@ -6323,7 +6493,8 @@ class Overlay:
             "%s"
             "QPushButton#quit:hover{background:rgba(194,112,61,58);color:#F2BA95;"
             "border-color:rgba(242,186,149,96);}"
-            % (background, edge, int(skin.get("radius") or 14), btn)
+            % (background, edge,
+               int(skin.get("radius") if skin.get("radius") is not None else 14), btn)
         )
 
     def preview_opacity(self, value):
@@ -6386,7 +6557,7 @@ def build_settings(owner, embedded=False):
     from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
                                    QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
                                    QRadioButton, QButtonGroup, QPushButton, QFrame, QGridLayout,
-                                   QAbstractItemView, QWidget)
+                                   QAbstractItemView, QWidget, QSlider)
     from PySide6.QtCore import Qt
 
     cfg = owner.cfg
@@ -6589,6 +6760,12 @@ def build_settings(owner, embedded=False):
     row3d.addWidget(skin_box, 1)
     root.addLayout(row3d)
 
+    skin_tip = QLabel("下拉最下面两项是自定义：选「自定义颜色」在纯白底上自己配色，"
+                      "选「自定义图片」传一张自己的图当字幕底。")
+    skin_tip.setStyleSheet("color:#8C8781;font-size:11px;")
+    skin_tip.setWordWrap(True)
+    root.addWidget(skin_tip)
+
     def _preview_skin():
         k = str(skin_box.currentData() or "dialog_dark")
         cfg["overlay_skin"] = k
@@ -6600,7 +6777,190 @@ def build_settings(owner, embedded=False):
         except Exception as e:
             log("切换字幕皮肤失败：" + repr(e))
         save_config(cfg)
+        try:
+            _sync_custom_ui()
+        except Exception:
+            pass
     skin_box.currentIndexChanged.connect(lambda _i: _preview_skin())
+
+    # ---------------- 自定义皮肤：自己配颜色 / 自己传图 ----------------
+    def _push_skin():
+        """把自定义皮肤的几个值同步进悬浮条并立刻重画，不用等保存。"""
+        try:
+            ovc = owner.overlay.cfg
+            for k2 in ("overlay_skin", "overlay_cc_bg", "overlay_cc_text",
+                       "overlay_cc_sub", "overlay_skin_img", "overlay_skin_dim",
+                       "overlay_skin_radius"):
+                ovc[k2] = cfg.get(k2)
+            owner.overlay.update_look()
+            owner.overlay._render_history()
+            owner.overlay._fit_height()
+        except Exception as e:
+            log("自定义皮肤生效失败：" + repr(e))
+        save_config(cfg)
+
+    def _swatch(key, default):
+        """一个色块按钮：显示当前颜色，点一下弹调色板。"""
+        btn = QPushButton()
+        btn.setFixedHeight(26)
+        btn.setMinimumWidth(96)
+        btn.setCursor(getattr(Qt, "PointingHandCursor", 13))
+
+        def _paint():
+            c = str(cfg.get(key) or default)
+            try:
+                light_c = (sum(hex_rgb(c)) / 3.0) > 150
+            except Exception:
+                light_c = True
+            btn.setText(c)
+            btn.setStyleSheet(
+                "QPushButton{background:%s;color:%s;border:1px solid rgba(0,0,0,55);"
+                "border-radius:6px;font-size:11px;}"
+                % (c, "#141414" if light_c else "#FFFFFF"))
+
+        def _pick():
+            from PySide6.QtWidgets import QColorDialog
+            from PySide6.QtGui import QColor
+            c0 = QColor(str(cfg.get(key) or default))
+            pickd = QColorDialog.getColor(c0, None, "选一个颜色")
+            if pickd.isValid():
+                cfg[key] = pickd.name().upper()
+                _paint()
+                _push_skin()
+
+        _paint()
+        btn.clicked.connect(_pick)
+        return btn, _paint
+
+    cust_box = QWidget()
+    cust_lay = QVBoxLayout(cust_box)
+    cust_lay.setContentsMargins(0, 2, 0, 2)
+    cust_lay.setSpacing(6)
+    root.addWidget(cust_box)
+
+    cc_row = QWidget()
+    cc_lay = QHBoxLayout(cc_row)
+    cc_lay.setContentsMargins(0, 0, 0, 0)
+    cc_lay.setSpacing(8)
+    cc_lay.addWidget(QLabel("底色"))
+    sw_bg, _rp1 = _swatch("overlay_cc_bg", "#FFFFFF")
+    cc_lay.addWidget(sw_bg)
+    cc_lay.addWidget(QLabel("字幕"))
+    sw_txt, _rp2 = _swatch("overlay_cc_text", "#23232A")
+    cc_lay.addWidget(sw_txt)
+    cc_lay.addWidget(QLabel("副行"))
+    sw_sub, _rp3 = _swatch("overlay_cc_sub", "#6B6760")
+    cc_lay.addWidget(sw_sub)
+
+    def _reset_cc():
+        cfg["overlay_cc_bg"] = "#FFFFFF"
+        cfg["overlay_cc_text"] = "#23232A"
+        cfg["overlay_cc_sub"] = "#6B6760"
+        _rp1(), _rp2(), _rp3()
+        _push_skin()
+    btn_cc_reset = QPushButton("恢复白底黑字")
+    btn_cc_reset.clicked.connect(_reset_cc)
+    cc_lay.addWidget(btn_cc_reset)
+    cc_lay.addStretch(1)
+    cust_lay.addWidget(cc_row)
+
+    img_row = QWidget()
+    im_lay = QHBoxLayout(img_row)
+    im_lay.setContentsMargins(0, 0, 0, 0)
+    im_lay.setSpacing(8)
+    img_lbl = QLabel()
+    img_lbl.setStyleSheet("color:#6E6A63;font-size:11px;")
+
+    def _sync_img_label():
+        p = str(cfg.get("overlay_skin_img") or "")
+        img_lbl.setText(("已选：" + Path(p).name) if p else "还没选图：随便一张壁纸 / 立绘 / 纹理都行")
+
+    def _pick_img():
+        from PySide6.QtWidgets import QFileDialog
+        f, _ = QFileDialog.getOpenFileName(
+            None, "选一张图当字幕底", str(ROOT), "图片 (*.png *.jpg *.jpeg *.webp *.bmp *.gif)")
+        if f:
+            cfg["overlay_skin_img"] = f
+            _sync_img_label()
+            _push_skin()
+            try:
+                owner.set_status("字幕皮肤已换成这张图：%s" % Path(f).name, "ok")
+            except Exception:
+                pass
+
+    btn_img = QPushButton("选择图片…")
+    btn_img.clicked.connect(_pick_img)
+    btn_clear_img = QPushButton("清除")
+
+    def _clear_img():
+        cfg["overlay_skin_img"] = ""
+        _sync_img_label()
+        _push_skin()
+    btn_clear_img.clicked.connect(_clear_img)
+    im_lay.addWidget(btn_img)
+    im_lay.addWidget(btn_clear_img)
+    im_lay.addWidget(img_lbl, 1)
+    cust_lay.addWidget(img_row)
+
+    img_tune = QWidget()
+    it_lay = QHBoxLayout(img_tune)
+    it_lay.setContentsMargins(0, 0, 0, 0)
+    it_lay.setSpacing(8)
+    it_lay.addWidget(QLabel("压暗"))
+    dim_slider = QSlider(Qt.Horizontal)
+    dim_slider.setRange(0, 90)
+    dim_slider.setValue(int(cfg.get("overlay_skin_dim") or 35))
+    dim_slider.setFixedWidth(120)
+    it_lay.addWidget(dim_slider)
+    dim_val = QLabel("%d%%" % dim_slider.value())
+    dim_val.setStyleSheet("color:#8C8781;font-size:11px;")
+    it_lay.addWidget(dim_val)
+    it_lay.addSpacing(10)
+    it_lay.addWidget(QLabel("圆角"))
+    rad_slider = QSlider(Qt.Horizontal)
+    rad_slider.setRange(0, 48)
+    rad_slider.setValue(int(cfg.get("overlay_skin_radius") or 16))
+    rad_slider.setFixedWidth(100)
+    it_lay.addWidget(rad_slider)
+    rad_val = QLabel("%d px" % rad_slider.value())
+    rad_val.setStyleSheet("color:#8C8781;font-size:11px;")
+    it_lay.addWidget(rad_val)
+    it_lay.addStretch(1)
+    cust_lay.addWidget(img_tune)
+
+    def _on_dim(v):
+        cfg["overlay_skin_dim"] = int(v)
+        dim_val.setText("%d%%" % int(v))
+        _push_skin()
+
+    def _on_rad(v):
+        cfg["overlay_skin_radius"] = int(v)
+        rad_val.setText("%d px" % int(v))
+        _push_skin()
+    dim_slider.valueChanged.connect(_on_dim)
+    rad_slider.valueChanged.connect(_on_rad)
+
+    cc_hint = QLabel("自定义颜色：在纯白底上换色，字幕和副行各选一个色；皮肤下拉里选「自定义颜色」。")
+    cc_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    cc_hint.setWordWrap(True)
+    im_hint = QLabel("自定义图片：图会按字幕条宽度铺满、自动加圆角；压暗越高白字越清楚，越低越透出原图。")
+    im_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    im_hint.setWordWrap(True)
+    cust_lay.addWidget(cc_hint)
+    cust_lay.addWidget(im_hint)
+
+    def _sync_custom_ui():
+        k = str(skin_box.currentData() or "")
+        is_cc = k == "custom_color"
+        is_img = k == "custom_image"
+        cc_row.setVisible(is_cc)
+        cc_hint.setVisible(is_cc)
+        img_row.setVisible(is_img)
+        img_tune.setVisible(is_img)
+        im_hint.setVisible(is_img)
+        _sync_img_label()
+    _sync_img_label()
+    _sync_custom_ui()
     pos_hint = QLabel("默认底部居中、离任务栏 72px；交互模式下拖动字幕条，靠近中线 / 底部会自动吸附，松手记住。")
     pos_hint.setStyleSheet("color:#8C8781;font-size:11px;")
     pos_hint.setWordWrap(True)
