@@ -3658,8 +3658,11 @@ class Overlay:
 
         self.btn_pause = QPushButton("开始")
         self.btn_settings = QPushButton("设置")
-        self.btn_quit = QPushButton("关闭")
+        # 字幕条上的这颗按钮只收字幕，不退出程序：它常驻在游戏上层，
+        # 原来写「关闭」却直接退整个应用，误触一次识别就全停了。退出走托盘。
+        self.btn_quit = QPushButton("收起")
         self.btn_quit.setObjectName("quit")
+        self.on_tuck = None
         for b in (self.btn_pause, self.btn_settings, self.btn_quit):
             b.setFixedHeight(22)
             b.setCursor(QCursor(Qt.PointingHandCursor))
@@ -3667,7 +3670,7 @@ class Overlay:
             bar.addWidget(b)
         self.btn_pause.clicked.connect(on_toggle)
         self.btn_settings.clicked.connect(on_settings)
-        self.btn_quit.clicked.connect(on_quit)
+        self.btn_quit.clicked.connect(self._tuck_overlay)
 
         # 自动朗读开关（贴着状态行，只占一个小滑块的位置）
         self.chk_auto = QCheckBox("自动朗读")
@@ -3887,6 +3890,16 @@ class Overlay:
             except Exception:
                 pass
         return f
+
+    def _tuck_overlay(self):
+        """收起字幕条：识别、记录、收藏都照常，随时能再调出来。"""
+        try:
+            if callable(getattr(self, "on_tuck", None)):
+                self.on_tuck()
+                return
+            self.win.hide()
+        except Exception as e:
+            log("收起字幕条失败：" + repr(e))
 
     def _dyn_font_size(self, text=None):
         """对话框字号按句子长短自动变：短的放大、长的收小，夹在 [min,max] 之间。
@@ -8344,6 +8357,12 @@ class MainWindow:
             fs = max(11, min(17, fs))
             qss = theme_qss(str(self.cfg.get("theme") or "dark"))
             self.win.setStyleSheet(qss + "\nQWidget{font-size:%dpx;}" % fs)
+            # 字号变了，导航文字要按新字号重新算省略号，不然会重新溢出
+            for b in getattr(self, "nav_buttons", []) or []:
+                try:
+                    b.set_expanded(bool(getattr(self, "nav_expanded", True)))
+                except Exception:
+                    pass
         except Exception as e:
             log("应用界面字号失败：" + repr(e))
 
@@ -8423,9 +8442,15 @@ class MainWindow:
             # 不在悬停时展开侧栏：鼠标划过就变宽会让整个界面跟着移位。
             # 展开改由用户显式点击左上角的 ≡ 控制。
             def set_expanded(self, on):
-                self.setText(self.full if on else self.glyph)
-                # 侧栏内容左右各 6px margin，按钮宽 = 侧栏宽 - 12
-                self.setFixedWidth(156 if on else 40)
+                # 侧栏内容左右各 6px margin，按钮宽 = 侧栏宽 - 12。
+                # 文字比按钮宽时用省略号收尾，别再把「情景译」半个字切掉；
+                # 全名仍在 tooltip 里，鼠标停一下能看到。
+                self.setFixedWidth(178 if on else 40)
+                if not on:
+                    self.setText(self.glyph)
+                    return
+                fm = self.fontMetrics()
+                self.setText(fm.elidedText(self.full, Qt.ElideRight, 178 - 20))
 
         outer = QHBoxLayout(self.win)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -10305,8 +10330,8 @@ class MainWindow:
     def _toggle_nav(self):
         """侧栏展开/收起：只改侧栏自身宽度，右侧内容区宽度由布局自动吸收，不产生位移跳变。"""
         self.nav_expanded = not self.nav_expanded
-        self.nav_frame.setFixedWidth(168 if self.nav_expanded else 52)
-        self.btn_nav_toggle.setFixedWidth(156 if self.nav_expanded else 40)
+        self.nav_frame.setFixedWidth(190 if self.nav_expanded else 52)
+        self.btn_nav_toggle.setFixedWidth(178 if self.nav_expanded else 40)
         for b in self.nav_buttons:
             b.set_expanded(self.nav_expanded)
         self.cfg["nav_expanded"] = self.nav_expanded
@@ -13052,6 +13077,8 @@ class App:
         self.overlay = Overlay(cfg, self.ui_q, self.quit, self.toggle_pause, self.open_settings)
         self.main = MainWindow(self, cfg)
         self.overlay.book = self.main.book          # 交互模式里选词查义，复用同一本词典
+        # 字幕条「收起」→ 交给主程序统一处理（同时取消主窗口勾选，两处状态一致）
+        self.overlay.on_tuck = self._tuck_overlay
         self.overlay.on_locate = self.main.locate_sentence   # 点字幕 → 定位记录表那一行
         self.overlay.last_audio_getter = lambda: (self.capture.last_audio if self.capture else None)
         self._interactive = False
@@ -13361,6 +13388,18 @@ class App:
     def toggle_interactive(self):
         self.overlay.set_interactive(not getattr(self.overlay, "_interactive", False))
         log("字幕交互模式：%s" % ("开（可选中文字）" if self.overlay._interactive else "关（鼠标穿透回游戏）"))
+
+    def _tuck_overlay(self):
+        """把字幕条收起来（不退出程序），主窗口勾选同步取消。"""
+        try:
+            self.cfg["show_overlay"] = False
+            save_config(self.cfg)
+            self.set_overlay_visible(False)
+            self.main.chk_overlay.setChecked(False)
+            self.main.set_status("字幕条已收起，随时可以再调出来", "ok")
+            log("字幕条已收起（字幕条「收起」按钮）")
+        except Exception as e:
+            log("收起字幕条失败：" + repr(e))
 
     def set_overlay_visible(self, visible):
         try:
