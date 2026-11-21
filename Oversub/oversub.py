@@ -14673,6 +14673,15 @@ class App:
         self.paused = False
         self.overlay = Overlay(cfg, self.ui_q, self.quit, self.toggle_pause, self.open_settings)
         self.main = MainWindow(self, cfg)
+        # 启动就按保存的皮肤刷一遍全貌。Overlay 构造里只铺了卡片底色，正文颜色还是
+        # 硬编码的白 / 浅灰；选了浅色皮肤（Galgame 浅色 / 纸质 / 玻璃 / 纯白）时就成了
+        # 白字浅底，看着像“皮肤没生效、又回到默认了”，其实只是没人调用 _apply_skin。
+        try:
+            _sk_key, _sk = skin_of(cfg)
+            self.overlay.update_look()
+            log("启动应用字幕皮肤：%s（%s）" % (_sk.get("name") or _sk_key, _sk_key))
+        except Exception as e:
+            log("启动应用字幕皮肤失败：" + repr(e))
         self.overlay.book = self.main.book          # 交互模式里选词查义，复用同一本词典
         # 字幕条「收起」→ 交给主程序统一处理（同时取消主窗口勾选，两处状态一致）
         self.overlay.on_tuck = self._tuck_overlay
