@@ -202,6 +202,7 @@ DEFAULT_CONFIG = {
     "hold_scale": 1.0,
     "show_overlay": True,
     "overlay_pos": "top",         # bottom / bottom_high / top / free：字幕条出现的位置（默认顶部锚定）
+    "overlay_free_bottom": 0,     # 自由位置时记住的「底边」：变高向上长、收合回原位，不乱跳
     "overlay_skin": "dialog_dark",  # 字幕皮肤：dialog_dark / galgame_light / atri / lyrics / cinema …
     # 自定义颜色皮肤（overlay_skin=custom_color）：底色 / 主字幕 / 副字幕，纯白底上换色
     "overlay_cc_bg": "#FFFFFF",
@@ -5875,6 +5876,9 @@ class Overlay:
                 preset = "top"
             self.cfg["overlay_pos"] = preset
             self.win.move(x, y)
+            # 拖动后记住的是这条「底边」，之后说话变高向上长、不说话收合回原位
+            self._free_bottom = int(y + h) if preset == "free" else 0
+            self.cfg["overlay_free_bottom"] = int(self._free_bottom)
             self._remember_geometry()
             save_config(self.cfg)
             self._show_toast("字幕位置已保存")
@@ -5935,11 +5939,16 @@ class Overlay:
             if preset == "free":
                 win = self.cfg.get("window") or {}
                 x = int(win.get("x") or (scr.left() + (scr.width() - w) // 2))
-                y = int(win.get("y") or (scr.bottom() - h - gap))
-                # 不再按旧高度补差：它在收合/展开之间会把 y 一路带歪，
-                # 底边对齐交给 _clamp_to_screen 统一处理
-                self.win.move(x, y)
+                # 自由位置统一拿「底边」做锚：说话变高时向上长，收合回这条底边，
+                # 不会出现「一不说话就跳回上面、一说话又落回底部」的来回跳。
+                bottom = (int(getattr(self, "_free_bottom", 0) or 0)
+                          or int(self.cfg.get("overlay_free_bottom") or 0)
+                          or (scr.bottom() - gap))
+                bottom = min(max(scr.top() + h, bottom), scr.bottom())
+                self._free_bottom = bottom
+                self.win.move(x, bottom - h)
             else:
+                self._free_bottom = 0
                 x = scr.left() + (scr.width() - w) // 2
                 if preset == "top":
                     # 顶部固定 = 贴住屏幕上沿；留白只靠窗口自身的 MARGIN，
