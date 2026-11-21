@@ -3673,7 +3673,170 @@ def split_words(text, lang="en"):
     return fn(text)
 
 
+# ---------------------------------------------------------------- 词典插件（可安装）
+DICT_PLUGIN_DIR = ROOT / "plugins" / "dict"
+
+# 插件就是「按这个语种的文字规则切词」的规则包：装到本地 plugins/dict/<语种>.json，
+# 装上即挂进 DICT_PARSERS，双击查词 / 拆词就有这个语种的分词器；卸载即摘掉。
+DICT_CATALOG = {
+    "en": dict(name="英语分词", version="1.1", pattern=r"[A-Za-z][A-Za-z'\-]*", min_len=2,
+               note="程序自带兜底，卸载后会自动挂回"),
+    "fr": dict(name="法语分词", version="1.0",
+               pattern=r"[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'\-]*", min_len=2,
+               note="按拉丁字母切词，保留连字符与撇号"),
+    "de": dict(name="德语分词", version="1.0",
+               pattern=r"[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß'\-]*", min_len=2,
+               note="德语长复合词按原词整体切，不做二次拆分"),
+    "es": dict(name="西班牙语分词", version="1.0",
+               pattern=r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ'\-]*", min_len=2,
+               note="认得重音字母与倒问号句"),
+    "ko": dict(name="韩语分词", version="1.0", pattern=r"[가-힣]+", min_len=1,
+               note="按谚文音节块切分"),
+    "ar": dict(name="阿拉伯语分词", version="1.0", pattern=r"[ء-ي\u0600-\u06FF]+", min_len=2,
+               note="从右到左书写，切词不受方向影响"),
+    "ru": dict(name="俄语分词", version="1.0", pattern=r"[А-Яа-яЁё]+", min_len=2,
+               note="按西里尔字母切分"),
+    "ja": dict(name="日语分词", version="1.0", pattern=r"[ぁ-んァ-ヶ一-龯]+", min_len=1,
+               note="按假名 / 汉字连续块切分"),
+}
+
+
+def dict_plugin_path(lang):
+    return DICT_PLUGIN_DIR / ("%s.json" % str(lang))
+
+
+def dict_plugin_installed(lang):
+    try:
+        return dict_plugin_path(lang).exists()
+    except Exception:
+        return False
+
+
+def _tokenizer_from(pattern, min_len=2, tag=""):
+    """按插件里的正则生成切词函数；跟内置解析器同一个签名，注册进 DICT_PARSERS 即可用。"""
+    import re as _re
+    rx = _re.compile(str(pattern or ""))
+
+    def _tok(text):
+        seen, out = set(), []
+        for w in rx.findall(str(text or "")):
+            low = w.lower()
+            if len(low) < max(1, int(min_len or 2)) or low in seen:
+                continue
+            seen.add(low)
+            out.append(w)
+        return out
+
+    _tok.__name__ = "tok_%s" % (tag or "plugin")
+    return _tok
+
+
+def load_installed_dict_plugins():
+    """启动时把已安装插件重新挂上，重启一次不用再点安装。"""
+    try:
+        DICT_PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+        for f in sorted(DICT_PLUGIN_DIR.glob("*.json")):
+            try:
+                meta = json.loads(f.read_text(encoding="utf-8"))
+                lang = str(meta.get("lang") or f.stem)
+                if not meta.get("pattern"):
+                    continue
+                register_dict(lang, _tokenizer_from(meta.get("pattern"), meta.get("min_len"), lang))
+            except Exception as e:
+                log("加载词典插件失败 %s：%r" % (f.name, e))
+    except Exception as e:
+        log("扫描词典插件目录失败：" + repr(e))
+
+
+def install_dict_plugin(lang):
+    lang = str(lang or "")
+    meta = DICT_CATALOG.get(lang)
+    if not meta:
+        return False, "这个语种还没有可装的插件"
+    try:
+        DICT_PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+        pack = dict(meta)
+        pack["lang"] = lang
+        pack["installed_at"] = time.strftime("%Y-%m-%d %H:%M")
+        dict_plugin_path(lang).write_text(
+            json.dumps(pack, ensure_ascii=False, indent=2), encoding="utf-8")
+        register_dict(lang, _tokenizer_from(pack.get("pattern"), pack.get("min_len"), lang))
+        log("词典插件已安装：%s（%s）" % (lang, pack.get("name")))
+        return True, "已安装：%s" % pack.get("name", lang)
+    except Exception as e:
+        log("安装词典插件失败：" + repr(e))
+        return False, "装不上：%r" % e
+
+
+def uninstall_dict_plugin(lang):
+    lang = str(lang or "")
+    try:
+        p = dict_plugin_path(lang)
+        if p.exists():
+            p.unlink()
+        DICT_PARSERS.pop(lang, None)
+        if lang == "en":                      # 英文有程序自带兜底，摘掉后挂回去
+            register_dict("en", _parse_en)
+        log("词典插件已卸载：%s" % lang)
+        return True, "已卸载"
+    except Exception as e:
+        log("卸载词典插件失败：" + repr(e))
+        return False, "卸不掉：%r" % e
+
+
+def import_dict_plugin(path):
+    """支持用户自己做的插件：一个 json，至少要有 lang 和 pattern。"""
+    try:
+        meta = json.loads(Path(str(path)).read_text(encoding="utf-8"))
+        lang = str(meta.get("lang") or "").strip()
+        pattern = str(meta.get("pattern") or "").strip()
+        if not lang or not pattern:
+            return False, "插件文件里缺 lang 或 pattern"
+        DICT_PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+        meta.setdefault("name", lang)
+        meta.setdefault("version", "1.0")
+        meta["lang"] = lang
+        dict_plugin_path(lang).write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        register_dict(lang, _tokenizer_from(pattern, meta.get("min_len"), lang))
+        log("导入词典插件：%s ← %s" % (lang, path))
+        return True, "已导入：%s" % meta.get("name")
+    except Exception as e:
+        log("导入词典插件失败：" + repr(e))
+        return False, "导入失败：%r" % e
+
+
 # ---------------------------------------------------------------- 悬浮窗（Qt）
+_WHEEL_GUARD = None
+
+
+def install_wheel_guard(app):
+    """滚轮防误触：下拉框 / 数字框 / 滑块必须自己拿到焦点才认滚轮，
+    否则鼠标在设置页里扫过滚两下就把值改了（用户报的就是这个）。"""
+    global _WHEEL_GUARD
+    if _WHEEL_GUARD is not None:
+        return _WHEEL_GUARD
+    from PySide6.QtCore import QObject, QEvent
+    from PySide6.QtWidgets import QComboBox, QAbstractSpinBox, QSlider
+
+    class _WheelGuard(QObject):
+        def eventFilter(self, obj, ev):
+            try:
+                if ev.type() == QEvent.Wheel and isinstance(
+                        obj, (QComboBox, QAbstractSpinBox, QSlider)):
+                    if not obj.hasFocus():
+                        ev.ignore()
+                        return True
+            except Exception:
+                pass
+            return False
+
+    g = _WheelGuard(app)
+    app.installEventFilter(g)
+    _WHEEL_GUARD = g
+    return g
+
+
 def _make_mark_label():
     """字幕英文标签的子类：交互模式下给「困难」生词画一条极细下划线。
     非交互模式（穿透/游戏中）完全不画，画面上看不到任何额外东西。"""
@@ -3763,6 +3926,17 @@ class Overlay:
         app = QApplication.instance() or QApplication(sys.argv)
         self.app = app
         app.setQuitOnLastWindowClosed(False)
+        # 已安装的词典插件开机自动挂回，否则重启后又要手点一次安装
+        try:
+            load_installed_dict_plugins()
+        except Exception as e:
+            log("加载已安装词典插件失败：" + repr(e))
+        # 滚轮防误触：下拉框 / 数字框 / 滑块只有在自己拿到焦点时才认滚轮，
+        # 否则鼠标路过滚一下就悄悄改了设置（设置页最容易踩）。
+        try:
+            install_wheel_guard(app)
+        except Exception as e:
+            log("安装滚轮防误触失败：" + repr(e))
 
         win = cfg.get("window") or {}
         self.win = QWidget()
@@ -10171,14 +10345,56 @@ class MainWindow:
         v2.addWidget(self.lab_model_status)
 
         # 3) 词典插件市场
-        v3 = lab_card("词典插件市场", "双击单词查义由词典插件提供，不是硬编码；每个语种挂自己的分词 / 释义解析器。")
-        self.lab_dict_table = QTableWidget(len(LANG_REGISTRY), 2)
-        self.lab_dict_table.setHorizontalHeaderLabels(["语种", "词典插件"])
+        v3 = lab_card("词典插件市场",
+                      "每个语种挂自己的分词器；装好就在本地 plugins/dict 里，重启仍然在，卸载即摘掉。")
+        self.lab_dict_table = QTableWidget(len(LANG_REGISTRY), 4)
+        self.lab_dict_table.setHorizontalHeaderLabels(["语种", "插件", "状态", "安装 / 卸载"])
         self.lab_dict_table.verticalHeader().setVisible(False)
         self.lab_dict_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.lab_dict_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.lab_dict_table.setColumnWidth(0, 110)
         self.lab_dict_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.lab_dict_table.setMaximumHeight(190)
+        self.lab_dict_table.setColumnWidth(2, 90)
+        self.lab_dict_table.setColumnWidth(3, 172)
+        self.lab_dict_table.setMinimumHeight(250)
         v3.addWidget(self.lab_dict_table)
+        drow = QHBoxLayout()
+        self.lab_dict_hint = QLabel("")
+        self.lab_dict_hint.setObjectName("chip")
+        self.lab_dict_hint.setWordWrap(True)
+        drow.addWidget(self.lab_dict_hint, 1)
+        btn_dict_import = QPushButton("导入插件文件…")
+        btn_dict_import.setCursor(_LabQt.PointingHandCursor)
+        btn_dict_import.setFixedHeight(26)
+        drow.addWidget(btn_dict_import)
+        btn_dict_open = QPushButton("打开插件目录")
+        btn_dict_open.setCursor(_LabQt.PointingHandCursor)
+        btn_dict_open.setFixedHeight(26)
+        drow.addWidget(btn_dict_open)
+        v3.addLayout(drow)
+
+        def _lab_import_dict():
+            from PySide6.QtWidgets import QFileDialog
+            f, _ = QFileDialog.getOpenFileName(
+                None, "选一个词典插件 json", str(DICT_PLUGIN_DIR),
+                "插件 (*.json)")
+            if not f:
+                return
+            ok, msg = import_dict_plugin(f)
+            self.set_status(msg, "ok" if ok else "warn")
+            try:
+                self.lab_refresh()
+            except Exception:
+                pass
+        btn_dict_import.clicked.connect(_lab_import_dict)
+
+        def _lab_open_dict_dir():
+            try:
+                DICT_PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
+                os.startfile(str(DICT_PLUGIN_DIR))
+            except Exception as e:
+                self.set_status("打不开插件目录：%r" % e, "warn")
+        btn_dict_open.clicked.connect(_lab_open_dict_dir)
 
         # 4) 识别规则
         v4 = lab_card("识别规则", "过滤、长度、说话人、原声切片；立即影响 Capture 的记录与字幕。",
@@ -12186,8 +12402,50 @@ class MainWindow:
         return max(0, min(self._lib_idx, len(self._lib_rows) - 1)) if self._lib_rows else 0
 
     # ---------------- Lab 实验室 ----------------
+    def _dict_btns(self, code, installed):
+        """词典插件市场每行两个按钮：装 / 卸，状态不同按钮也不同。"""
+        from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(4, 0, 4, 0)
+        lay.setSpacing(6)
+        b1 = QPushButton("重装" if installed else "安装")
+        b1.setFixedHeight(24)
+        b2 = QPushButton("卸载")
+        b2.setFixedHeight(24)
+        b2.setEnabled(bool(installed))
+        b1.clicked.connect(lambda _=False, c=code: self._lab_install_dict(c))
+        b2.clicked.connect(lambda _=False, c=code: self._lab_uninstall_dict(c))
+        lay.addWidget(b1)
+        lay.addWidget(b2)
+        lay.addStretch(1)
+        return w
+
+    def _lab_install_dict(self, code):
+        ok, msg = install_dict_plugin(code)
+        try:
+            self.set_status(msg, "ok" if ok else "warn")
+        except Exception:
+            pass
+        try:
+            self.lab_refresh()
+        except Exception as e:
+            log("刷新词典插件表失败：" + repr(e))
+
+    def _lab_uninstall_dict(self, code):
+        ok, msg = uninstall_dict_plugin(code)
+        try:
+            self.set_status(msg, "ok" if ok else "warn")
+        except Exception:
+            pass
+        try:
+            self.lab_refresh()
+        except Exception as e:
+            log("刷新词典插件表失败：" + repr(e))
+
     def lab_refresh(self):
         from PySide6.QtWidgets import QTableWidgetItem
+        from PySide6.QtGui import QColor
         if not hasattr(self, "lab_lang_table"):
             return
         codes = list(LANG_REGISTRY.keys())
@@ -12206,13 +12464,32 @@ class MainWindow:
             % (len(codes), n_ok))
 
         self.lab_dict_table.setRowCount(len(codes))
+        n_dict_ok = 0
         for i, code in enumerate(codes):
-            fn = DICT_PARSERS.get(code)
-            name = getattr(fn, "__name__", "") if fn else "—"
+            meta = DICT_CATALOG.get(code) or {}
+            inst = dict_plugin_installed(code)
+            mounted = code in DICT_PARSERS
+            if mounted:
+                n_dict_ok += 1
             self.lab_dict_table.setItem(i, 0, QTableWidgetItem(
                 "%s %s" % (LANG_REGISTRY[code].get("name"), code)))
             self.lab_dict_table.setItem(i, 1, QTableWidgetItem(
-                ("内置解析器 %s" % name) if fn else "未挂载（双击查词会提示不支持）"))
+                (meta.get("name") + (" v" + str(meta.get("version"))) if meta
+                 else "该语种暂无可用插件")))
+            item = QTableWidgetItem("已安装" if inst else ("已挂载" if mounted else "未安装"))
+            try:
+                item.setForeground(QColor("#3C8F63") if (inst or mounted) else QColor("#9A948C"))
+            except Exception:
+                pass
+            self.lab_dict_table.setItem(i, 2, item)
+            self.lab_dict_table.setCellWidget(i, 3, self._dict_btns(code, inst))
+
+        try:
+            self.lab_dict_hint.setText(
+                "已挂载 %d / %d 个语种的分词器；插件落在 %s，重启自动加载。"
+                % (n_dict_ok, len(codes), str(DICT_PLUGIN_DIR)))
+        except Exception:
+            pass
 
         cur_asr = str(self.cfg.get("whisper_model") or "small")
         for k in range(self.lab_asr.count()):
