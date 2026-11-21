@@ -3896,6 +3896,32 @@ class Overlay:
         r = fm.boundingRect(QRect(0, 0, int(width), 10000), Qt.TextWordWrap, s)
         return max(fm.height(), r.height() + 2)
 
+    def _shrink_to_fit(self, label, avail_w, max_lines=3, min_fs=13):
+        """文字超出固定行数时逐级缩小字号；只改显示字体，不动 cfg 基准字号。
+
+        对话框宽高已锁定，超长句子靠缩字号塞进卡片，而不是把窗口撑大。
+        """
+        try:
+            from PySide6.QtCore import QRect, Qt
+            from PySide6.QtGui import QFontMetrics
+            text = label.text()
+            if not text:
+                return
+            cur = label.font().pointSize()
+            fs = int(cur) if cur and cur > 0 else int(self.cfg.get("font_size") or 22)
+            fam = label.font().family() or "Segoe UI"
+            while fs > min_fs:
+                f = self._font(fs, True, fam, 0.2)
+                fm = QFontMetrics(f)
+                r = fm.boundingRect(QRect(0, 0, int(avail_w), 10000), Qt.TextWordWrap, text)
+                lines = max(1, round(r.height() / max(1, fm.height())))
+                if lines <= max_lines:
+                    break
+                fs -= 1
+            label.setFont(self._font(fs, True, fam, 0.2))
+        except Exception:
+            pass
+
     @staticmethod
     def _esc(t):
         return (t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
@@ -5331,7 +5357,8 @@ class Overlay:
                 p = ev.position()
                 if p.x() >= self.panel.width() - 18 and p.y() >= self.panel.height() - 18:
                     self._resizing = True
-                    self._rs_base = (ev.globalPosition().x(), self.win.width())
+                    self._rs_base = (ev.globalPosition().x(), ev.globalPosition().y(),
+                                     self.win.width(), self.win.height())
                     return
         except Exception:
             pass
@@ -5349,10 +5376,17 @@ class Overlay:
             return
         if getattr(self, "_resizing", False) and ev.buttons() & Qt.LeftButton:
             try:
-                base_x, base_w = self._rs_base
+                base_x, base_y, base_w, base_h = self._rs_base
                 scr = self.win.screen().availableGeometry()
-                w = max(480, min(scr.width() - self.MARGIN * 2, base_w + (ev.globalPosition().x() - base_x)))
-                self.win.resize(int(w), self.win.height())
+                dx = ev.globalPosition().x() - base_x
+                dy = ev.globalPosition().y() - base_y
+                w = max(480, min(scr.width() - self.MARGIN * 2, base_w + dx))
+                h = max(160, min(scr.height() - self.MARGIN * 2, base_h + dy))
+                self.win.resize(int(w), int(h))
+                # 记下新尺寸：固定几何据此锁定，后续 _fit_height 不会弹回默认档位
+                _win = self.cfg.setdefault("window", {})
+                _win["w"] = int(w)
+                _win["h"] = int(h)
                 self._fit_height()
             except Exception:
                 pass
@@ -5367,10 +5401,11 @@ class Overlay:
             try:
                 win = self.cfg.setdefault("window", {})
                 win["w"] = int(self.win.width())
+                win["h"] = int(self.win.height())
                 save_config(self.cfg)
-                self._show_toast("字幕宽度 %d" % self.win.width())
+                self._show_toast("字幕尺寸 %d × %d" % (self.win.width(), self.win.height()))
             except Exception as e:
-                log("保存字幕宽度失败：" + repr(e))
+                log("保存字幕尺寸失败：" + repr(e))
             return
         if not getattr(self, "_drag_moved", False):
             self._drag_pos = None
@@ -5420,10 +5455,10 @@ class Overlay:
             # 对话框模式：高度锁死在固定档位，留白按屏高比例算（换分辨率观感一致）
             dialog = str(self.cfg.get("overlay_style") or "dialog") == "dialog"
             gap = max(40, int(scr.height() * 0.055)) if dialog else 72
-            w = max(480, self.win.width())
             if dialog:
-                h = self._dialog_h() if self._has_text() else 92
+                w, h = self._fixed_geometry()
             else:
+                w = max(480, self.win.width())
                 h = max(100, self.win.height())
             self.win.resize(w, h)
             if preset == "free":
@@ -5722,6 +5757,11 @@ class Overlay:
             self._hist_idle.start(sec * 1000)
         except Exception:
             pass
+        try:
+            _inner = max(220, self.win.width() - self.MARGIN * 2 - 3 - 35)
+            self._shrink_to_fit(self.dst_label, _inner, max_lines=3)
+        except Exception:
+            pass
         self._apply_skin()
         self._fit_height()
         lag_txt = ""
@@ -5782,6 +5822,26 @@ class Overlay:
         except Exception:
             fs = 20
         return max(200, min(340, int(fs * 1.5 * 3) + 168))
+
+    def _fixed_geometry(self):
+        """对话框模式下锁定的宽高：优先用户拖拽保存的尺寸，否则按默认档位。
+
+        内容再多也只在卡片内排 / 裁，窗口本身的宽高不随句子长短变化；
+        只有用户从右下角拖拽才会改这个尺寸。
+        """
+        win = self.cfg.get("window") or {}
+        try:
+            w = int(win.get("w") or 0)
+        except Exception:
+            w = 0
+        try:
+            h = int(win.get("h") or 0)
+        except Exception:
+            h = 0
+        w = max(480, w or self.win.width() or 640)
+        if h < 160:
+            h = self._dialog_h()
+        return w, h
 
     def _toggle_anchor(self):
         """底部 ⇅：在顶部 / 底部之间来回换，专治挡住游戏 HUD 或挡往站立角色。"""
@@ -5862,21 +5922,20 @@ class Overlay:
             self.panel.layout().invalidate()
             self.panel.layout().activate()
             h = self.panel.sizeHint().height() + self.MARGIN * 2
-            # A 案（Galgame 对话框）：高度恒定、底边死锁。内容超长只在卡片内裁，
-            # 窗口尺寸和位置都不动，就不会出现“字幕条自己往上凸起”。
-            if str(self.cfg.get("overlay_style") or "dialog") == "dialog":
-                if self._has_text() or self.hist_box.isVisibleTo(self.win):
-                    h = self._dialog_h()
-                else:
-                    # 空闲态（静音 / 刚启动还没有句子）收成一条窄框，不白占一块画面
-                    h = 92
+            dialog = str(self.cfg.get("overlay_style") or "dialog") == "dialog"
+            if dialog:
+                # 对话框形态：宽高锁定为固定几何，内容再长也只在卡片内排 / 裁，
+                # 窗口不随句子长短上下、左右变化；空闲态也不再收成窄条。
+                fw, fh = self._fixed_geometry()
+                w, h = fw, fh
             else:
+                w = self.win.width()
                 h = max(118, min(420, h))
-            if abs(self.win.height() - h) > 3:
+            if abs(self.win.width() - w) > 3 or abs(self.win.height() - h) > 3:
                 old_bottom = self.win.y() + self.win.height()
                 self.win.layout().invalidate()
-                self.win.setMinimumSize(0, 0)     # 布局会把窗口最小高度顶到旧值，先清掉
-                self.win.resize(self.win.width(), h)
+                self.win.setMinimumSize(0, 0)     # 布局会把窗口最小尺寸顶到旧值，先清掉
+                self.win.resize(w, h)
                 # 底部预设要“往上长”，否则变高会顶出屏幕；自由位置也保底边，当前句不跟着上下跳
                 preset = str(self.cfg.get("overlay_pos") or "bottom")
                 if preset == "top":
