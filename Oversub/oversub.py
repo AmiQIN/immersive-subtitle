@@ -3893,17 +3893,17 @@ class Overlay:
             except Exception:
                 text = ""
         n = len((text or "").strip())
-        if n <= 6:
+        if n <= 4:
             fs = hi
-        elif n <= 12:
+        elif n <= 8:
             fs = hi - 2
-        elif n <= 20:
-            fs = hi - 5
-        elif n <= 30:
-            fs = hi - 8
-        elif n <= 45:
-            fs = hi - 11
-        elif n <= 70:
+        elif n <= 14:
+            fs = hi - 6
+        elif n <= 22:
+            fs = hi - 9
+        elif n <= 34:
+            fs = hi - 12
+        elif n <= 50:
             fs = hi - 14
         else:
             fs = lo
