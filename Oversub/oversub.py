@@ -10727,8 +10727,14 @@ class MainWindow:
 
     def _rename_session(self):
         txt = self.lbl_session.text().strip()
+        # 界面自己刷出来的文本不算用户改名：QLineEdit 在焦点转移时也会发 editingFinished，
+        # 以前这条会把显示着的旧名字（比如「上一场：APEX 组排」）当成用户输入，
+        # 还弹一条「会话已重命名」，看着就像自己莫名其妙改了名。
+        if txt == getattr(self, "_sess_shown", ""):
+            return
         if txt.startswith("上一场："):
-            txt = txt[len("上一场："):]
+            self._sync_capture_ui()
+            return
         for sep in (" · 本次 ", " · 20"):
             if sep in txt:
                 txt = txt.split(sep)[0]
@@ -10783,6 +10789,8 @@ class MainWindow:
                 self.lbl_session.setText("本会话 · 未开始")
             self.lbl_session.setToolTip(
                 "点一下给这一场起名，回车生效；开始捕获后自动标本次开始时间。")
+            # 记下界面自己写的这串字，编成 _rename_session 里「没真改过就别当改名」的比对基准
+            self._sess_shown = self.lbl_session.text()
         if hasattr(self, "top_session"):
             self.top_session.setText("会话：%s" % scene)
         if hasattr(self, "top_pair"):
