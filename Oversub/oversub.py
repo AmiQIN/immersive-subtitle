@@ -6658,6 +6658,79 @@ class Overlay:
         except Exception as e:
             log("字幕条收合失败：" + repr(e))
 
+    def _fit_text_into_card(self, inner):
+        """对话框高度锁死时，正文超出卡片就把字号一级级缩下来。
+
+        字号只在这个范围里活动：overlay_font_max（默认 34）往下、overlay_font_min
+        （默认 20）为常见下限，极端长句允许继续缩到 12；缩到 12 还放不下才裁掉末尾。
+        这条路径只改显示字号，不动 cfg 里的基准字号，也不改窗口尺寸。
+        """
+        try:
+            from PySide6.QtCore import QRect, Qt
+            from PySide6.QtGui import QFontMetrics
+            lab = self.dst_label
+            if not lab.isVisibleTo(self.win) or not lab.text():
+                return
+            fh = self._fixed_geometry()[1]
+            lo = max(12, int(self.cfg.get("overlay_font_min") or 20))
+            fam = lab.font().family() or "Segoe UI"
+            fs = int(lab.font().pointSize() or self.cfg.get("font_size") or 22)
+
+            def height_at(size):
+                fm = QFontMetrics(self._font(size, True, fam, 0.2))
+                r = fm.boundingRect(QRect(0, 0, int(inner), 10000), Qt.TextWordWrap,
+                                    lab.text())
+                return max(fm.height(), r.height() + 2)
+
+            def overflow():
+                self.panel.layout().invalidate()
+                self.panel.layout().activate()
+                return self.panel.sizeHint().height() + self.MARGIN * 2 - fh
+
+            lab.setFont(self._font(fs, True, fam, 0.2))
+            lab.setFixedHeight(height_at(fs))
+            over = overflow()
+            if over <= 2:
+                return
+
+            def fits(size):
+                lab.setFont(self._font(size, True, fam, 0.2))
+                lab.setFixedHeight(height_at(size))
+                return overflow() <= 1
+
+            # 第一轮：保住历史行，只把正文字号往下缩（下限 overlay_font_min）
+            fs_new = fs
+            while fs_new > lo:
+                fs_new -= 1
+                if fits(fs_new):
+                    log("正文字号 %d→%d：整句塞进对话框（%.0f 字）"
+                        % (fs, fs_new, len(lab.text())))
+                    return
+            # 第二轮：缩到下限还放不下，让上一句整块让位，正文优先
+            if self.hist_box.isVisibleTo(self.win):
+                # 只压高度不 hide：下一句进来 _fit_height 会按新空间重新分配
+                self.hist_box.setFixedHeight(0)
+                if fits(fs_new):
+                    log("正文字号 %d→%d、收起上一句：整句塞进对话框（%.0f 字）"
+                        % (fs, fs_new, len(lab.text())))
+                    return
+            # 第三轮：极端长句，继续缩到 12
+            while fs_new > 12:
+                fs_new -= 1
+                if fits(fs_new):
+                    log("正文字号 %d→%d：超长句塞进对话框（%.0f 字）"
+                        % (fs, fs_new, len(lab.text())))
+                    return
+            # 最后兜底：按剩余空间裁，宁可切掉末尾也不压住底部按钮
+            room = max(24, lab.height() - (overflow() + 1))
+            lab.setFont(self._font(fs_new, True, fam, 0.2))
+            lab.setFixedHeight(room)
+            overflow()
+            log("正文超长：字号收到 %d、剩余 %.0f px 内裁剪（%.0f 字）"
+                % (fs_new, room, len(lab.text())))
+        except Exception as e:
+            log("正文塞进对话框失败：" + repr(e))
+
     def _fit_height(self):
         """把卡片量准；对话框模式下窗口高度恒定，不再随句子长短上下跳。"""
         try:
@@ -6670,8 +6743,19 @@ class Overlay:
             if self.hist_box.isVisibleTo(self.win):
                 cap = 10 ** 6
                 if str(self.cfg.get("overlay_style") or "dialog") == "dialog":
-                    # 历史最多占四成，其余留给当前句
-                    cap = int(self._dialog_h() * 0.42)
+                    # 当前句优先：先把正文、副行和底部状态行占掉的高度扣出来，
+                    # 剩下的才轮到历史。以前写死“历史最多占四成”，正文一长就顶出
+                    # 卡片，第二行直接压到底部按钮上；现在历史自动少一条让位。
+                    _dh = self._dialog_h()
+                    _rest = _dh - self.MARGIN * 2 - 30
+                    for _lab in (self.src_label, self.dst_label):
+                        if _lab.isVisibleTo(self.win) and _lab.text():
+                            _rest -= _lab.height() + 4
+                    try:
+                        _rest -= max(24, self.top_bar_w.sizeHint().height()) + 4
+                    except Exception:
+                        _rest -= 28
+                    cap = max(0, min(int(_dh * 0.42), int(_rest)))
                 items = getattr(self, "_hist_widgets", [])
                 heights = []
                 for w in items:
@@ -6704,6 +6788,8 @@ class Overlay:
                 self.hist_box.setFixedHeight(max(0, total))
             self.panel.layout().invalidate()
             self.panel.layout().activate()
+            if str(self.cfg.get("overlay_style") or "dialog") == "dialog":
+                self._fit_text_into_card(inner)
             h = self.panel.sizeHint().height() + self.MARGIN * 2
             dialog = str(self.cfg.get("overlay_style") or "dialog") == "dialog"
             if dialog:
