@@ -2350,6 +2350,12 @@ class AudioCapture(threading.Thread):
     def stop(self):
         self._stop.set()
 
+    def start(self):
+        """先亮 running 再起线程：UI 在 start() 返回后立刻刷新。
+        以前 running 要等 run() 跑到采集循环里才置真，主卡按钮会短暂停在「开始捕获」。"""
+        self.running = True
+        super().start()
+
     def run(self):
         try:
             import numpy as np
@@ -8885,6 +8891,7 @@ class MainWindow:
         self.lbl_session.setFixedWidth(220)
         self.lbl_session.setToolTip("点一下直接改会话名，回车生效（不弹窗）")
         self.lbl_session.editingFinished.connect(self._rename_session)
+        self._sess_name = ""          # 这一场自己起的名字；不读配置里的旧名
         meta.addWidget(self.lbl_session)
         meta.addStretch(1)
         self.live_state = QLabel("就绪")
@@ -10726,8 +10733,9 @@ class MainWindow:
             if sep in txt:
                 txt = txt.split(sep)[0]
         txt = txt.strip()
-        self.cfg["session_name"] = txt
-        save_config(self.cfg)
+        if txt in ("本会话 · 未开始", "未开始", "本会话"):
+            txt = ""
+        self._sess_name = txt
         self._sync_capture_ui()
         self.set_status("会话已重命名：%s" % (txt or "未命名"), "ok")
 
@@ -10756,10 +10764,10 @@ class MainWindow:
         dev = str(self.cfg.get("loopback_device") or "系统默认")
         self.lbl_audio_dev.setText("音频源：%s" % (dev if len(dev) <= 18 else dev[:16] + "…"))
         scene = SCENE_SHORT.get(str(self.cfg.get("scene") or ""), "未标注")
-        custom = str(self.cfg.get("session_name") or "").strip()
-        head = custom or ("本会话 · %s" % scene)
-        # 时间只标「本次这一场」开始的时刻；未开始时明确写成「上一场」，
-        # 别把上次会话的名字顶在正在录的位置上。
+        # 只认这一场自己起的名字，不再把配置里上一次的会话名（APEX 组排之类）顶上来
+        name = str(getattr(self, "_sess_name", "") or "").strip()
+        head = name or "本会话"
+        # 时间只标「本次这一场」开始的时刻；没开始时就不摆会话名，只写未开始。
         # 旧写法用 hasFocus() 判「别覆盖用户输入」，可控件只要恰巧有焦点就永远跳过，
         # 标签于是冻结在 2026-11-19 23:35，看着像一直挂在 APEX 组排。
         if running and not paused and not getattr(self, "_sess_t0", None):
@@ -10769,13 +10777,12 @@ class MainWindow:
             t0 = getattr(self, "_sess_t0", None)
             if t0:
                 self.lbl_session.setText("%s · 本次 %s" % (head, t0[11:16]))
-            elif custom:
-                self.lbl_session.setText("上一场：%s" % custom)
-                self.lbl_session.setToolTip(
-                    "这是上一场会话的名字，存在配置里所以重启还在。"
-                    "点一下改成这次的名字，回车生效；开始捕获后会自动标本次时间。")
+            elif name:
+                self.lbl_session.setText(name)
             else:
-                self.lbl_session.setText(head)
+                self.lbl_session.setText("本会话 · 未开始")
+            self.lbl_session.setToolTip(
+                "点一下给这一场起名，回车生效；开始捕获后自动标本次开始时间。")
         if hasattr(self, "top_session"):
             self.top_session.setText("会话：%s" % scene)
         if hasattr(self, "top_pair"):
