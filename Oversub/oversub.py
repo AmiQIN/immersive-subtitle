@@ -10026,6 +10026,7 @@ class MainWindow:
         self.talk_ph.setAlignment(Qt.AlignCenter)
         tk.addWidget(self.talk_ph, 1)
         self._talk_view = None
+        self._talk_ready = False
         self.tabs.addTab(self.talk_tab, "SceneTalk｜情景译")
 
         # 设置直接做成一个页面：不再弹独立窗口，翻页就能改，看完就切走
@@ -10664,9 +10665,7 @@ class MainWindow:
         """情景译起不来时给一张会说人话的提示，而不是整页纯白。"""
         try:
             self._talk_failed = True
-            self.talk_ph.setText("%s\n\n这不影响识别、翻译和素材库，其它页面照常用。" % msg)
-            self.talk_ph.show()
-            self.talk_ph.raise_()
+            self._cover_talk("%s\n\n这不影响识别、翻译和素材库，其它页面照常用。" % msg)
         except Exception:
             pass
         log("情景译不可用：" + str(msg))
@@ -10675,11 +10674,68 @@ class MainWindow:
         try:
             if ok:
                 self._talk_failed = False
-                self.talk_ph.hide()
+                self._talk_ready = True
                 log("情景译页面已载入")
+                # 只在用户正看着这一页时才把网页翻出来；后台预热时不动，
+                # 等真正切过来再走「同色底遮几十毫秒」的流程。
+                if self.tabs.currentWidget() is self.talk_tab:
+                    self._talk_reveal_soon()
             else:
+                self._talk_ready = False
+                if getattr(self, "_talk_view", None) is not None:
+                    self._talk_view.setVisible(False)
                 self._talk_fail("情景译页面没载起来（本地页面服务可能没启动成功）。"
                                 "再点一次左侧「SceneTalk」会重新加载。")
+        except Exception:
+            pass
+
+    def _talk_reveal_soon(self):
+        """网页已经载好时：先让它在同色底下面画好，再撤底，避免首次合成出白帧。"""
+        from PySide6.QtCore import QTimer as _QTimer
+        try:
+            if getattr(self, "_talk_view", None) is not None:
+                self._talk_view.setVisible(True)
+        except Exception:
+            pass
+        self._cover_talk("")
+        _QTimer.singleShot(180, self._reveal_talk)
+
+    def _reveal_talk(self):
+        """撤掉遮底的空白层，露出网页本身。"""
+        try:
+            if not getattr(self, "_talk_ready", False):
+                return
+            if getattr(self, "_talk_view", None) is not None:
+                self._talk_view.setVisible(True)
+            self.talk_ph.hide()
+        except Exception:
+            pass
+
+    def _cover_talk(self, txt=None):
+        """在情景译页上盖一层与页面同色的底（页面底色是纯白），
+        遮住网页初次显示时 Chromium 合成出来的白/黑帧。txt 给空串就只遮色。"""
+        try:
+            if txt is not None:
+                self.talk_ph.setText(txt)
+            try:
+                self.talk_ph.setStyleSheet("QLabel{background:#FFFFFF;}")
+            except Exception:
+                pass
+            self.talk_ph.setGeometry(0, 0, self.talk_tab.width(), self.talk_tab.height())
+            self.talk_ph.show()
+            self.talk_ph.raise_()
+            from PySide6.QtCore import QTimer as _QT
+            _QT.singleShot(0, self._fit_talk_ph)
+            _QT.singleShot(60, self._fit_talk_ph)
+        except Exception:
+            pass
+
+    def _fit_talk_ph(self):
+        """切页瞬间布局还没算完，遮底层要先铺满整页，否则下面会露出一块黑。"""
+        try:
+            self.talk_ph.setGeometry(0, 0, self.talk_tab.width(), self.talk_tab.height())
+            if self.talk_ph.isVisible():
+                self.talk_ph.raise_()
         except Exception:
             pass
 
@@ -10701,12 +10757,18 @@ class MainWindow:
             return None
         try:
             view = QWebEngineView(self.talk_tab)
+            # 先不显示：Chromium 冷启动 + 渲染后端切换期间窗口会白/黑闪一下，
+            # 挂个隐藏着的视图慢慢载，载完再露，看起来就是「直接出页面」。
+            view.setVisible(False)
             lay = self.talk_tab.layout()
             if lay is not None:
                 lay.removeWidget(self.talk_ph)
                 self.talk_ph.setParent(self.talk_tab)      # 留作覆盖提示层
                 lay.addWidget(view, 1)
-            self.talk_ph.hide()
+            try:
+                self._cover_talk("正在打开情景译…")
+            except Exception:
+                pass
             try:
                 view.page().renderProcessTerminated.connect(
                     lambda *a: self._talk_fail("情景译的网页渲染进程崩了，已自动切回提示页。"))
@@ -10744,13 +10806,19 @@ class MainWindow:
             if getattr(self, "_talk_failed", False) and getattr(self, "_talk_view", None) is not None:
                 self._talk_failed = False
                 try:
-                    self.talk_ph.setText("正在重新加载情景译…")
-                    self.talk_ph.show()
+                    self._cover_talk("正在重新加载情景译…")
+                    self._talk_view.setVisible(False)
                     self._talk_view.reload()
                 except Exception:
                     pass
             else:
                 self._ensure_talk_view()
+                if getattr(self, "_talk_view", None) is not None:
+                    if getattr(self, "_talk_ready", False):
+                        # 页面早就载好了：拿同色底挡住首次合成的那一下白
+                        self._talk_reveal_soon()
+                    else:
+                        self._cover_talk("正在打开情景译…")
             self._goto_tab(self._tab_index("SceneTalk"))
         else:
             last = int(self.cfg.get("last_lib_tab") or 1)
@@ -13395,6 +13463,17 @@ class MainWindow:
         # 布局在 show 之后还会再算一次，0ms / 250ms 各校准一次，防止被压回标题条
         _QTimer.singleShot(0, self._restore_geometry)
         _QTimer.singleShot(250, self._reassert_geometry)
+        # 情景译的网页在后台先建好：Chromium 冷启动要卡一下，留到用户点侧栏时才启动，
+        # 就会看到窗口卡住再整块重绘（像关掉又重开）。等窗口稳了再悄悄建。
+        _QTimer.singleShot(1500, self._prewarm_talk)
+
+    def _prewarm_talk(self):
+        """启动后在后台把情景译页面载好，第一次点侧栏就是现成的，不用等。"""
+        try:
+            if getattr(self, "_talk_view", None) is None and not getattr(self, "_talk_failed", False):
+                self._ensure_talk_view()
+        except Exception:
+            pass
 
     def _reassert_geometry(self):
         """窗口被压成标题条、异常过小或缩在任务栏时，强制回到上次保存的尺寸。"""
