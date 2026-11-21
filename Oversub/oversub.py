@@ -6323,18 +6323,19 @@ class Overlay:
             pass
 
     def _dialog_h(self):
-        """Galgame 对话框的固定高度：约 3 行正文 + 上下留白，跟着字号微调。"""
+        """Galgame 对话框的固定高度：约 2 行正文 + 上下留白，跟着字号微调。
+        默认比原来紧一档（以前按 3 行算，字大一点就显得一大块空框）。"""
         try:
             n = int(self.cfg.get("overlay_dialog_h") or 0)
         except Exception:
             n = 0
-        if n >= 96:
+        if n >= 120:
             return n
         try:
             fs = int(self.cfg.get("font_size") or 20)
         except Exception:
             fs = 20
-        return max(200, min(340, int(fs * 1.5 * 3) + 168))
+        return max(190, min(320, int(fs * 1.5 * 2) + 150))
 
     def _fixed_geometry(self):
         """对话框模式下锁定的宽高：优先用户拖拽保存的尺寸，否则按默认档位。
@@ -6900,7 +6901,76 @@ def build_settings(owner, embedded=False):
             owner.overlay._fit_height()
         except Exception:
             pass
+        try:
+            _sync_style_rows()
+        except Exception:
+            pass
     sty_box.currentIndexChanged.connect(lambda _i: _preview_style())
+
+    # 对话框高度：默认按字号算（约 2 行），想更矮 / 更高就在这里拖
+    row3b2 = QHBoxLayout()
+    lbl_dh = QLabel("对话框高度")
+    row3b2.addWidget(lbl_dh)
+    dlg_h_slider = QSlider(Qt.Horizontal)
+    dlg_h_slider.setRange(140, 380)
+    dlg_h_slider.setSingleStep(4)
+    dlg_h_slider.setFixedWidth(200)
+    try:
+        dlg_h_slider.setValue(int(owner.overlay._dialog_h()))
+    except Exception:
+        dlg_h_slider.setValue(240)
+    row3b2.addWidget(dlg_h_slider)
+    dlg_h_val = QLabel("%d px" % dlg_h_slider.value())
+    dlg_h_val.setStyleSheet("color:#8C8781;font-size:11px;")
+    dlg_h_val.setFixedWidth(52)
+    row3b2.addWidget(dlg_h_val)
+    btn_dlg_auto = QPushButton("按字号自动")
+    btn_dlg_auto.setCursor(Qt.PointingHandCursor)
+    btn_dlg_auto.setFixedHeight(26)
+    btn_dlg_auto.setToolTip("清掉手调的高度，回到「字号 × 2 行」的默认档")
+    row3b2.addWidget(btn_dlg_auto)
+    row3b2.addStretch(1)
+    root.addLayout(row3b2)
+    dlg_h_hint = QLabel("只影响「对话框」形态：定死高度、内容在框里排，不会随句子长短上下跳。")
+    dlg_h_hint.setStyleSheet("color:#8C8781;font-size:11px;")
+    dlg_h_hint.setWordWrap(True)
+    root.addWidget(dlg_h_hint)
+
+    def _preview_dialog_h(v):
+        cfg["overlay_dialog_h"] = int(v)
+        try:
+            owner.overlay.cfg["overlay_dialog_h"] = int(v)
+            dlg_h_val.setText("%d px" % int(v))
+            owner.overlay.apply_position(save=False)
+            owner.overlay._fit_height()
+        except Exception:
+            pass
+
+    def _reset_dialog_h():
+        cfg["overlay_dialog_h"] = 0
+        try:
+            owner.overlay.cfg["overlay_dialog_h"] = 0
+            hh = int(owner.overlay._dialog_h())
+            dlg_h_slider.blockSignals(True)
+            dlg_h_slider.setValue(hh)
+            dlg_h_slider.blockSignals(False)
+            dlg_h_val.setText("%d px" % hh)
+            owner.overlay.apply_position(save=False)
+            owner.overlay._fit_height()
+        except Exception:
+            pass
+
+    dlg_h_slider.valueChanged.connect(lambda v: _preview_dialog_h(int(v)))
+    btn_dlg_auto.clicked.connect(_reset_dialog_h)
+
+    def _sync_style_rows():
+        is_d = str(cfg.get("overlay_style") or "dialog") == "dialog"
+        for _w in (lbl_dh, dlg_h_slider, dlg_h_val, btn_dlg_auto, dlg_h_hint):
+            try:
+                _w.setVisible(is_d)
+            except Exception:
+                pass
+    _sync_style_rows()
 
     row3c = QHBoxLayout()
     row3c.addWidget(QLabel("顶部留白"))
