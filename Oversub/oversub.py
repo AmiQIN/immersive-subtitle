@@ -3578,6 +3578,14 @@ class Overlay:
         self._hl_text = ""
         self._hl_color = "#FFFFFF"
 
+        # QtWebEngine 硬性要求：共享 OpenGL 上下文必须在 QApplication 创建之前打开。
+        # 少了这一条，内嵌的情景译页面会渲染成一片纯白（点「SceneTalk」后整窗空白）。
+        try:
+            from PySide6.QtCore import QCoreApplication
+            if QApplication.instance() is None:
+                QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
+        except Exception as e:
+            log("设置共享 GL 上下文失败：" + repr(e))
         app = QApplication.instance() or QApplication(sys.argv)
         self.app = app
         app.setQuitOnLastWindowClosed(False)
@@ -10325,13 +10333,15 @@ class MainWindow:
         try:
             if idx is None:
                 idx = self.tabs.currentIndex()
-            if idx == 0:
+            # 按页名推断所属模块，别再用写死的下标：插页后侧栏高亮不会指错
+            title = str(self.tabs.tabText(idx) or "")
+            if title.startswith("Capture"):
                 group = "Capture"
-            elif idx == 6:
+            elif title.startswith("Lab"):
                 group = "Lab"
-            elif idx == 7:
+            elif title.startswith("SceneTalk"):
                 group = "Talk"
-            elif idx == 8:
+            elif title.startswith("设置"):
                 group = "Settings"
             else:
                 group = "Library"
@@ -10348,42 +10358,98 @@ class MainWindow:
         except Exception as e:
             log("切页状态同步失败：" + repr(e))
 
+    def _talk_fail(self, msg):
+        """情景译起不来时给一张会说人话的提示，而不是整页纯白。"""
+        try:
+            self._talk_failed = True
+            self.talk_ph.setText("%s\n\n这不影响识别、翻译和素材库，其它页面照常用。" % msg)
+            self.talk_ph.show()
+            self.talk_ph.raise_()
+        except Exception:
+            pass
+        log("情景译不可用：" + str(msg))
+
+    def _on_talk_loaded(self, ok):
+        try:
+            if ok:
+                self._talk_failed = False
+                self.talk_ph.hide()
+                log("情景译页面已载入")
+            else:
+                self._talk_fail("情景译页面没载起来（本地页面服务可能没启动成功）。"
+                                "再点一次左侧「SceneTalk」会重新加载。")
+        except Exception:
+            pass
+
     def _ensure_talk_view(self):
-        """懒加载情景译：第一次点「说」才创建 Web 视图，冷启动不受影响。"""
+        """懒加载情景译：第一次点「说」才创建 Web 视图，冷启动不受影响。
+        任何一步失败都落到 _talk_fail，绝不留一整块空白页面。"""
         if getattr(self, "_talk_view", None) is not None:
             return self._talk_view
         try:
             from PySide6.QtCore import QUrl
             from PySide6.QtWebEngineWidgets import QWebEngineView
+        except Exception as e:
+            self._talk_fail("这台机器缺 Qt WebEngine 组件，情景译跑不起来：%s" % e)
+            return None
+        try:
             port = scenetalk_port()
+        except Exception as e:
+            self._talk_fail("找不到 SceneTalk 页面（缺少 SceneTalk\\SceneTalk.html）：%s" % e)
+            return None
+        try:
             view = QWebEngineView(self.talk_tab)
             lay = self.talk_tab.layout()
             if lay is not None:
-                lay.replaceWidget(self.talk_ph, view)
+                lay.removeWidget(self.talk_ph)
+                self.talk_ph.setParent(self.talk_tab)      # 留作覆盖提示层
+                lay.addWidget(view, 1)
             self.talk_ph.hide()
+            try:
+                view.page().renderProcessTerminated.connect(
+                    lambda *a: self._talk_fail("情景译的网页渲染进程崩了，已自动切回提示页。"))
+            except Exception:
+                pass
+            view.loadFinished.connect(self._on_talk_loaded)
             view.setUrl(QUrl("http://127.0.0.1:%d/SceneTalk.html" % port))
             self._talk_view = view
             log("情景译已嵌入主程序：127.0.0.1:%d" % port)
         except Exception as e:
-            log("情景译载入失败：" + repr(e))
-            try:
-                self.talk_ph.setText("情景译载入失败：%s" % e)
-            except Exception:
-                pass
-        return getattr(self, "_talk_view", None)
+            self._talk_fail("情景译创建失败：%s" % e)
+            return None
+        return self._talk_view
+
+    def _tab_index(self, title, default=0):
+        """按页名找下标：以后在中间插页也不会把侧栏指错页。"""
+        try:
+            for i in range(self.tabs.count()):
+                if str(self.tabs.tabText(i) or "").startswith(title):
+                    return i
+        except Exception:
+            pass
+        return default
 
     def _nav_go(self, prefix):
-        """侧栏四个入口：Capture / Library / Talk / Lab。Library 落到上次停留的子页。"""
+        """侧栏入口：Capture / Library / Talk / Lab / Settings，页面按名字定位。"""
         if prefix == "Capture":
-            self._goto_tab(0)
+            self._goto_tab(self._tab_index("Capture"))
         elif prefix == "Lab":
-            self._goto_tab(6)
+            self._goto_tab(self._tab_index("Lab"))
         elif prefix == "Settings":
-            self._goto_tab(8)
+            self._goto_tab(self._tab_index("设置", self.tabs.count() - 1))
         elif prefix == "Talk":
-            # 情景译是内嵌网页：第一次进来才启动 Chromium，不拖慢冷启动
-            self._ensure_talk_view()
-            self._goto_tab(7)
+            # 情景译是内嵌网页：第一次进来才启动 Chromium；上次失败过就在这里重试
+            if getattr(self, "_talk_failed", False) and getattr(self, "_talk_view", None) is not None:
+                self._talk_failed = False
+                try:
+                    self.talk_ph.setText("正在重新加载情景译…")
+                    self.talk_ph.show()
+                    self._talk_view.reload()
+                except Exception:
+                    pass
+            else:
+                self._ensure_talk_view()
+            self._goto_tab(self._tab_index("SceneTalk"))
         else:
             last = int(self.cfg.get("last_lib_tab") or 1)
             self._goto_tab(last if 1 <= last <= 5 else 1)
