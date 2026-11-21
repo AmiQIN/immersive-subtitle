@@ -3687,7 +3687,7 @@ class Overlay:
 
         self.dst_label = _make_mark_label()("")
         self.dst_label.setWordWrap(True)
-        self.dst_label.setFont(self._font(int(cfg.get("font_size") or 22), True, "Segoe UI", 0.2))
+        self.dst_label.setFont(self._font(30, True, "Segoe UI", 0.2))
         self.dst_label.setStyleSheet("color:#FFFFFF;")
         lay.addWidget(self.dst_label)
 
@@ -3880,11 +3880,51 @@ class Overlay:
                 pass
         return f
 
+    def _dyn_font_size(self, text=None):
+        """对话框字号按句子长短自动变：短的放大、长的收小，夹在 [min,max] 之间。
+        用户不再需要手调字幕字号，这里保证再长再短都不会难看。"""
+        lo = int(self.cfg.get("overlay_font_min") or 20)
+        hi = int(self.cfg.get("overlay_font_max") or 34)
+        if hi < lo + 4:
+            hi = lo + 4
+        if text is None:
+            try:
+                text = self.dst_label.toPlainText()
+            except Exception:
+                text = ""
+        n = len((text or "").strip())
+        if n <= 6:
+            fs = hi
+        elif n <= 12:
+            fs = hi - 2
+        elif n <= 20:
+            fs = hi - 5
+        elif n <= 30:
+            fs = hi - 8
+        elif n <= 45:
+            fs = hi - 11
+        elif n <= 70:
+            fs = hi - 14
+        else:
+            fs = lo
+        return max(lo, min(hi, fs))
+
+    def _apply_dyn_font(self, text=None):
+        """当前句定完字号再排高度，避免先按旧字号排、再跳一次。"""
+        try:
+            fs = self._dyn_font_size(text)
+            self._cur_fs = fs
+            fam = lang_font(CURRENT_LANGS.get("tl", "en"), self.cfg) or "Segoe UI"
+            self.dst_label.setFont(self._font(fs, True, fam, 0.2))
+            return fs
+        except Exception:
+            return 24
+
     def _prev_size(self):
-        return max(11, int((self.cfg.get("font_size") or 22) * 0.62))
+        return max(11, int(getattr(self, "_cur_fs", 26) * 0.62))
 
     def _hist_size(self):
-        return max(12, int((self.cfg.get("font_size") or 22) * 0.74))
+        return max(12, int(getattr(self, "_cur_fs", 26) * 0.74))
 
     @staticmethod
     def _text_height(label, width, text=None):
@@ -5382,6 +5422,8 @@ class Overlay:
                 dy = ev.globalPosition().y() - base_y
                 w = max(480, min(scr.width() - self.MARGIN * 2, base_w + dx))
                 h = max(160, min(scr.height() - self.MARGIN * 2, base_h + dy))
+                # 先解除旧的固定 max，否则拖拽会被旧尺寸卡住；记下新尺寸后再重新锁到新值
+                self.win.setMaximumSize(16777215, 16777215)
                 self.win.resize(int(w), int(h))
                 # 记下新尺寸：固定几何据此锁定，后续 _fit_height 不会弹回默认档位
                 _win = self.cfg.setdefault("window", {})
@@ -5461,6 +5503,7 @@ class Overlay:
                 w = max(480, self.win.width())
                 h = max(100, self.win.height())
             self.win.resize(w, h)
+            self._apply_geometry_lock()
             if preset == "free":
                 win = self.cfg.get("window") or {}
                 x = int(win.get("x") or (scr.left() + (scr.width() - w) // 2))
@@ -5697,8 +5740,8 @@ class Overlay:
         if self.cfg.get("overlay_bilingual", False) and zh_new:
             # 对照模式：中文 ｜ 英文 挤在同一行，卡片不会因为多一行变高
             self.dst_label.setText("%s  ｜  %s" % (zh_new, en))
-            self.dst_label.setFont(self._font(max(13, int((self.cfg.get("font_size") or 22) * 0.72)),
-                                              True, "Segoe UI"))
+            self.dst_label.setFont(self._font(
+                self._dyn_font_size(zh_new + " " + en), True, "Segoe UI"))
         else:
             # 主体选“另一种语言”：说中文就主体英文（译文）、副行中文原文；
             # 说英文就主体中文（译文）、副行英文原文。原来无论如何都只画 en，
@@ -5712,11 +5755,11 @@ class Overlay:
                 main_txt, sub_txt = en, zh_new
             else:
                 main_txt, sub_txt = en, ""
-            self.dst_label.setFont(self._font(int(self.cfg.get("font_size") or 22), True,
+            self.dst_label.setFont(self._font(self._dyn_font_size(main_txt), True,
                                               "Segoe UI", 0.2))
             # 副行（另一种语言）走上方小字位，主体大字留在下面，读起来才知道哪句是译文
             try:
-                fs_now = int(self.cfg.get("font_size") or 22)
+                fs_now = self._dyn_font_size(main_txt)
                 if sub_txt and str(sub_txt).strip() != str(main_txt).strip():
                     self.src_label.setFont(self._font(max(12, int(fs_now * 0.6)),
                                                       False, "Microsoft YaHei"))
@@ -5843,6 +5886,27 @@ class Overlay:
             h = self._dialog_h()
         return w, h
 
+    def _apply_geometry_lock(self):
+        """对话框模式把窗口的最小 / 最大尺寸一并锁到固定几何。
+
+        只调 resize 不够：子标签的固定行高会把布局最小尺寸顶大，顶层窗口随后又被
+        Qt 撑回去。min / max 同时锁死之后，内容再多也只能在卡片内换行、缩字号或裁剪，
+        窗口宽高不随文字变化；非对话框模式解除锁定，保留旧的高度自适应。
+        """
+        try:
+            dialog = str(self.cfg.get("overlay_style") or "dialog") == "dialog"
+            if dialog:
+                fw, fh = self._fixed_geometry()
+                self.win.setMinimumSize(fw, fh)
+                self.win.setMaximumSize(fw, fh)
+                if self.win.width() != fw or self.win.height() != fh:
+                    self.win.resize(fw, fh)
+            else:
+                self.win.setMinimumSize(0, 0)
+                self.win.setMaximumSize(16777215, 16777215)
+        except Exception as e:
+            log("锁定字幕几何失败：" + repr(e))
+
     def _toggle_anchor(self):
         """底部 ⇅：在顶部 / 底部之间来回换，专治挡住游戏 HUD 或挡往站立角色。"""
         try:
@@ -5935,7 +5999,9 @@ class Overlay:
                 old_bottom = self.win.y() + self.win.height()
                 self.win.layout().invalidate()
                 self.win.setMinimumSize(0, 0)     # 布局会把窗口最小尺寸顶到旧值，先清掉
+                self.win.setMaximumSize(16777215, 16777215)  # 解锁后再按目标尺寸重设
                 self.win.resize(w, h)
+                self._apply_geometry_lock()
                 # 底部预设要“往上长”，否则变高会顶出屏幕；自由位置也保底边，当前句不跟着上下跳
                 preset = str(self.cfg.get("overlay_pos") or "bottom")
                 if preset == "top":
@@ -6038,7 +6104,8 @@ class Overlay:
         self._apply_skin()
         self.src_label.setVisible(bool(self.cfg.get("show_source"))
                                   and not bool(self.cfg.get("overlay_bilingual", False)))
-        self.dst_label.setFont(self._font(int(self.cfg.get("font_size") or 22), True, lang_font(CURRENT_LANGS.get("tl", "en"), self.cfg) or "Segoe UI", 0.2))
+        self.dst_label.setFont(self._font(self._dyn_font_size(), True,
+                                          lang_font(CURRENT_LANGS.get("tl", "en"), self.cfg) or "Segoe UI", 0.2))
         try:
             # 文字方向按目标语种走：阿拉伯语等 RTL 语种自动从右到左排版
             from PySide6.QtCore import Qt as _Qt
@@ -6053,7 +6120,7 @@ class Overlay:
             if self.cfg.get("overlay_bilingual", False) and self._cur_zh:
                 self.dst_label.setText("%s  ｜  %s" % (self._cur_zh, self._cur_en))
                 self.dst_label.setFont(self._font(
-                    max(13, int((self.cfg.get("font_size") or 22) * 0.72)), True, "Segoe UI"))
+                    self._dyn_font_size(self._cur_zh + " " + self._cur_en), True, "Segoe UI"))
             else:
                 self.dst_label.setText(self._cur_en)
         self._render_history()          # 缓冲区按新字号重排
@@ -6084,7 +6151,7 @@ class Overlay:
 
 
 # ---------------------------------------------------------------- 设置窗口
-def build_settings(owner):
+def build_settings(owner, embedded=False):
     from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
                                    QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
                                    QRadioButton, QButtonGroup, QPushButton, QFrame, QGridLayout,
@@ -6092,10 +6159,15 @@ def build_settings(owner):
     from PySide6.QtCore import Qt
 
     cfg = owner.cfg
-    dlg = QDialog()
-    dlg.setWindowTitle("Oversub 设置")
-    dlg.setModal(True)
-    dlg.resize(560, 620)
+    if embedded:
+        # 内嵌进主窗口的「设置」页：不再弹独立窗口，用户不用在两处之间来回翻
+        dlg = QWidget()
+        dlg.setObjectName("settingsPage")
+    else:
+        dlg = QDialog()
+        dlg.setWindowTitle("Oversub 设置")
+        dlg.setModal(True)
+        dlg.resize(560, 620)
     theme = str(cfg.get("theme") or "dark")
     dlg.setStyleSheet(theme_qss(theme) + "QDialog{background:%s;}" % THEME_COLORS.get(theme, THEME_COLORS["dark"])["bg"])
     root = QVBoxLayout(dlg)
@@ -6112,16 +6184,14 @@ def build_settings(owner):
         root.addWidget(line)
 
     def _preview_font(px):
-        """字号也实时预览，跟透明度一样不用等保存。"""
+        """界面字号实时预览；字幕字号是按句子长短自动算的，这里不动它。"""
         try:
-            owner.overlay.cfg["font_size"] = int(px)
-            owner.overlay.dst_label.setFont(owner.overlay._font(px, True, "Segoe UI", 0.2))
-            owner.overlay._render_history()
-            owner.overlay._fit_height()
+            owner.cfg["ui_font_size"] = int(px)
+            owner.main.apply_ui_font()
         except Exception:
             pass
 
-    head("翻译引擎")
+    head("怎么翻译")
     row = QHBoxLayout()
     rb_local = QRadioButton("本地离线（免费，翻得生硬些）")
     rb_online = QRadioButton("在线模型（需 key，接近人话）")
@@ -6149,7 +6219,7 @@ def build_settings(owner):
         edits[key] = e
     root.addLayout(grid)
 
-    head("语种")
+    head("用什么语言")
     row = QHBoxLayout()
     row.addWidget(QLabel("源语言"))
     src_box = QComboBox()
@@ -6398,7 +6468,7 @@ def build_settings(owner):
     btn_pkg_fill.clicked.connect(_fill_packages)
     btn_pkg_del.clicked.connect(_uninstall_selected)
 
-    head("语音识别")
+    head("听声音（识别）")
     row = QHBoxLayout()
     row.addWidget(QLabel("识别模型（ASR）"))
     model_box = QComboBox()
@@ -6569,12 +6639,13 @@ def build_settings(owner):
     hint.setStyleSheet("color:#8C8781;font-size:11px;")
     root.addWidget(hint)
 
-    head("显示与断句")
+    head("字幕长什么样")
     row = QHBoxLayout()
-    row.addWidget(QLabel("字号"))
+    row.addWidget(QLabel("界面字号"))
     size = QSpinBox()
-    size.setRange(13, 44)
-    size.setValue(int(cfg.get("font_size") or 22))
+    size.setRange(11, 17)
+    size.setToolTip("只改主界面文字大小。字幕字号会按句子长短自动变，不用手调")
+    size.setValue(int(cfg.get("ui_font_size") or 13))
     row.addWidget(size)
     row.addSpacing(18)
     row.addWidget(QLabel("背景不透明度"))
@@ -6754,7 +6825,7 @@ def build_settings(owner):
     root.addWidget(bil_hint)
 
     # 字幕样式预设：游戏 / 观影 / 极简，字号、透明度、行数一起换
-    head("性能与扩展")
+    head("电脑负担")
     row_perf = QHBoxLayout()
     row_perf.addWidget(QLabel("性能档位"))
     perf_box = QComboBox()
@@ -6864,7 +6935,7 @@ def build_settings(owner):
         _place_anchor(prof.get("anchor") or "bottom")
     style_box.currentIndexChanged.connect(_apply_style)
 
-    head("朗读（跟读练习）")
+    head("朗读")
     row = QHBoxLayout()
     chk_auto = QCheckBox("新句子自动朗读")
     chk_auto.setChecked(bool(cfg.get("auto_read", False)))
@@ -6900,7 +6971,7 @@ def build_settings(owner):
     hl_hint.setWordWrap(True)
     root.addWidget(hl_hint)
 
-    head("快捷键（都可改）")
+    head("快捷键")
     from PySide6.QtWidgets import QKeySequenceEdit
     from PySide6.QtGui import QKeySequence as _QKS
     hk_grid = QGridLayout()
@@ -7034,7 +7105,7 @@ def build_settings(owner):
     idle_row.addStretch(1)
     root.addLayout(idle_row)
 
-    head("说话人区分")
+    head("谁在说话")
     chk_spk = QCheckBox("标注每句是谁说的（说话人1 / 2 / 3…）")
     chk_spk.setChecked(bool(cfg.get("diarize", False)))
     root.addWidget(chk_spk)
@@ -7161,7 +7232,13 @@ def build_settings(owner):
     root.addLayout(btns)
     def _cancel():
         owner.overlay.update_look()      # 取消：把实时预览退回到已保存的样子
-        dlg.reject()
+        if embedded:
+            try:
+                owner.main.set_status("没保存这次改动", "warn")
+            except Exception:
+                pass
+        else:
+            dlg.reject()
 
     cancel.clicked.connect(_cancel)
 
@@ -7247,7 +7324,11 @@ def build_settings(owner):
             except Exception as e:
                 log("保存快捷键后重注册失败：" + repr(e))
         cfg["loopback_device"] = dev_box.currentText()
-        cfg["font_size"] = int(size.value())
+        cfg["ui_font_size"] = int(size.value())
+        try:
+            owner.main.apply_ui_font()
+        except Exception:
+            pass
         cfg["overlay_prev_rows"] = int(prev_n.value())
         cfg["opacity"] = float(alpha.value())
         cfg["show_source"] = bool(chk_src.isChecked())
@@ -7396,7 +7477,13 @@ def build_settings(owner):
             owner.stop_capture()
             owner.paused = False
             owner.start_capture()
-        dlg.accept()
+        if not embedded:
+            dlg.accept()
+        else:
+            try:
+                owner.main.set_status("设置已保存", "ok")
+            except Exception:
+                pass
 
     ok.clicked.connect(apply)
     # 各处 hint 文字还留着旧的浅色写死值，按当前主题统一改一遍，避免深色下看不清
@@ -7409,6 +7496,8 @@ def build_settings(owner):
                          ("#E6E4E1", tc["border"])):
             ss = ss.replace(old, new)
         w.setStyleSheet(ss)
+    if embedded:
+        return dlg
     dlg.exec()
 
 
@@ -8240,6 +8329,16 @@ class MainWindow:
         except Exception:
             pass
 
+    def apply_ui_font(self):
+        """只改主界面文字大小，不动悬浮字幕（字幕字号按句长自动算）。"""
+        try:
+            fs = int(self.cfg.get("ui_font_size") or 13)
+            fs = max(11, min(17, fs))
+            qss = theme_qss(str(self.cfg.get("theme") or "dark"))
+            self.win.setStyleSheet(qss + "\nQWidget{font-size:%dpx;}" % fs)
+        except Exception as e:
+            log("应用界面字号失败：" + repr(e))
+
     def _start_geo_timer(self):
         try:
             from PySide6.QtCore import QTimer
@@ -8344,7 +8443,8 @@ class MainWindow:
         for glyph, full, prefix in (("捕", "Capture 捕获台", "Capture"),
                                     ("库", "Library 语言库", "Library"),
                                     ("说", "SceneTalk 情景译", "Talk"),
-                                    ("验", "Lab 实验室", "Lab")):
+                                    ("验", "Lab 实验室", "Lab"),
+                                    ("设", "设置", "Settings")):
             b = _NavBtn(glyph, full, nav)
             b.setCheckable(True)
             b.setProperty("grp", prefix)
@@ -8699,16 +8799,16 @@ class MainWindow:
         self.btn_fs_down = QPushButton("A−")
         self.btn_fs_down.setFixedHeight(28)
         self.btn_fs_down.setFixedWidth(40)
-        self.btn_fs_down.setToolTip("字幕字号减一档")
+        self.btn_fs_down.setToolTip("主界面字号小一点")
         self.btn_fs_down.clicked.connect(lambda: self._font_step(-1))
         look.addWidget(self.btn_fs_down)
-        self.lbl_fs = QLabel("字号 %d" % int(cfg.get("font_size") or 22))
+        self.lbl_fs = QLabel("界面字号 %d" % int(cfg.get("ui_font_size") or 13))
         self.lbl_fs.setObjectName("hint")
         look.addWidget(self.lbl_fs)
         self.btn_fs_up = QPushButton("A+")
         self.btn_fs_up.setFixedHeight(28)
         self.btn_fs_up.setFixedWidth(40)
-        self.btn_fs_up.setToolTip("字幕字号加一档")
+        self.btn_fs_up.setToolTip("主界面字号大一点")
         self.btn_fs_up.clicked.connect(lambda: self._font_step(1))
         look.addWidget(self.btn_fs_up)
 
@@ -9618,6 +9718,20 @@ class MainWindow:
         self._talk_view = None
         self.tabs.addTab(self.talk_tab, "SceneTalk｜情景译")
 
+        # 设置直接做成一个页面：不再弹独立窗口，翻页就能改，看完就切走
+        try:
+            from PySide6.QtWidgets import QScrollArea
+            self.settings_page = build_settings(self.owner, embedded=True)
+            self.settings_tab = QScrollArea()
+            self.settings_tab.setWidgetResizable(True)
+            self.settings_tab.setFrameShape(QFrame.NoFrame)
+            self.settings_tab.setWidget(self.settings_page)
+            self.tabs.addTab(self.settings_tab, "设置")
+        except Exception as e:
+            log("设置页载入失败：" + repr(e))
+            self.settings_page = None
+            self.settings_tab = None
+
         # ---- 顶层只留三个模块：隐藏原生的 7 个页签，改由侧栏 + 次级导航条切换 ----
         try:
             self.tabs.tabBar().hide()
@@ -9841,6 +9955,7 @@ class MainWindow:
         except Exception:
             pass
         self._sync_nav_state()
+        self.apply_ui_font()
         try:
             apply_ui_lang(self.win, self.cfg.get("ui_lang") or "zh")
             apply_ui_lang(self.owner.overlay, self.cfg.get("ui_lang") or "zh")
@@ -10216,6 +10331,8 @@ class MainWindow:
                 group = "Lab"
             elif idx == 7:
                 group = "Talk"
+            elif idx == 8:
+                group = "Settings"
             else:
                 group = "Library"
             for b in self.nav_buttons:
@@ -10261,6 +10378,8 @@ class MainWindow:
             self._goto_tab(0)
         elif prefix == "Lab":
             self._goto_tab(6)
+        elif prefix == "Settings":
+            self._goto_tab(8)
         elif prefix == "Talk":
             # 情景译是内嵌网页：第一次进来才启动 Chromium，不拖慢冷启动
             self._ensure_talk_view()
@@ -10404,17 +10523,16 @@ class MainWindow:
             log("切换字幕位置失败：" + repr(e))
 
     def _font_step(self, step):
+        """只调主界面字号；字幕字号按句子长短自动变。"""
         try:
-            fs = int(self.cfg.get("font_size") or 22)
-            fs = max(14, min(48, fs + int(step) * 2))
-            self.cfg["font_size"] = fs
-            self.lbl_fs.setText("字号 %d" % fs)
-            self.owner.overlay.cfg["font_size"] = fs
-            self.owner.overlay.update_look()
-            self.owner.overlay._fit_height()
+            fs = int(self.cfg.get("ui_font_size") or 13) + int(step)
+            fs = max(11, min(17, fs))
+            self.cfg["ui_font_size"] = fs
+            self.lbl_fs.setText("界面字号 %d" % fs)
+            self.apply_ui_font()
             save_config(self.cfg)
         except Exception as e:
-            log("调整字幕字号失败：" + repr(e))
+            log("调整界面字号失败：" + repr(e))
 
     def _toggle_hist_drawer(self):
         vis = self.hist_box.isHidden()
@@ -13361,6 +13479,21 @@ class App:
         self.start_pipeline()
 
     def open_settings(self):
+        """设置已经内嵌成页面：这里只负责把主窗口切过去，不再弹小窗。"""
+        try:
+            page = getattr(self.main, "settings_tab", None)
+            if page is not None:
+                self.main._goto_tab(self.main.tabs.indexOf(page))
+                self.main.win.show()
+                self.main.win.raise_()
+                self.main.win.activateWindow()
+                try:
+                    self.main.refresh_chips()
+                except Exception:
+                    pass
+                return
+        except Exception as e:
+            log("切到设置页失败：" + repr(e))
         build_settings(self)
         try:
             self.main.refresh_chips()
