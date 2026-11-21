@@ -753,7 +753,7 @@ UI_MAP = {
     "石墨（低饱和暗灰）": "Graphite (muted dark)", "深海（夜间冷色）": "Ocean (night cool)",
     "暖纸（护眼米色）": "Warm paper (eye care)", "高对比（纯黑亮字）": "High contrast",
     "外观与主题": "Appearance & theme", "识别规则": "Recognition rules",
-    "语种管理": "Languages", "模型管理": "Models", "词典插件": "Dictionary plugins",
+    "模型管理": "Models",
     "界面主题": "Theme", "字幕主题": "Subtitle theme",
     "中→英（你会说）": "Chinese → English", "英→中（你听懂）": "English → Chinese",
     "自测模式": "Self-test", "素材库": "Library", "生词本": "Wordbook",
@@ -3901,13 +3901,19 @@ def _tokenizer_from(pattern, min_len=2, tag=""):
 
 
 def load_installed_dict_plugins():
-    """启动时把已安装插件重新挂上，重启一次不用再点安装。"""
+    """启动时把已安装插件重新挂上，重启一次不用再点安装。
+
+    只认英文：其它语种的插件目录只剩历史遗留文件（软件不再提供安装入口），
+    直接跳过，免得挂上一个只会乱切词的假分词器。
+    """
     try:
         DICT_PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
         for f in sorted(DICT_PLUGIN_DIR.glob("*.json")):
             try:
                 meta = json.loads(f.read_text(encoding="utf-8"))
                 lang = str(meta.get("lang") or f.stem)
+                if lang not in ("en", "zh"):
+                    continue
                 if not meta.get("pattern"):
                     continue
                 register_dict(lang, _tokenizer_from(meta.get("pattern"), meta.get("min_len"), lang))
@@ -7705,17 +7711,10 @@ def build_settings(owner, embedded=False):
     pkg_state.setWordWrap(True)
     root.addWidget(pkg_state)
 
-    row = QHBoxLayout()
-    btn_pkg_fill = QPushButton("检查并补装翻译包")
-    btn_pkg_del = QPushButton("卸载选中的包")
-    for b in (btn_pkg_fill, btn_pkg_del):
-        b.setCursor(Qt.PointingHandCursor)
-        b.setFixedHeight(28)
-        row.addWidget(b)
-    row.addStretch(1)
-    root.addLayout(row)
-
-    _pkg_busy = {"on": False}
+    pkg_note = QLabel("只支持 中文 ↔ 英语：这两个方向的包随软件带上，不需要、也没法在软件里下载别的语种。")
+    pkg_note.setStyleSheet("color:#8C8781;font-size:11px;")
+    pkg_note.setWordWrap(True)
+    root.addWidget(pkg_note)
 
     def _installed_pairs():
         try:
@@ -7735,108 +7734,9 @@ def build_settings(owner, embedded=False):
                 it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 pkg_table.setItem(i, j, it)
         if not rows:
-            pkg_state.setText("本机还没有任何翻译包，点「检查并补装翻译包」会真的去 Argos 源下载。")
+            pkg_state.setText("本机还没有翻译包；正常安装包里中英双向都已带上。")
 
     _refresh_pkg_table()
-
-    def _need_pairs():
-        sl = str(cfg.get("source_lang") or "zh")
-        tl = str(cfg.get("target_lang") or "en")
-        pairs = [(sl, tl)]
-        if (tl, sl) not in pairs:
-            pairs.append((tl, sl))
-        return pairs
-
-    def _fill_packages():
-        if _pkg_busy["on"]:
-            return
-        from PySide6.QtWidgets import QApplication
-        pairs = _need_pairs()
-        have = [(a, b) for a, b, _v in _installed_pairs()]
-        missing = [p for p in pairs if p not in have]
-        if not missing:
-            pkg_state.setText("当前语种对的翻译包都已安装：%s。如需重装，先卸载再补装。"
-                              % "、".join("%s → %s" % p for p in pairs))
-            return
-        _pkg_busy["on"] = True
-        btn_pkg_fill.setEnabled(False)
-        pkg_state.setText("正在从 Argos 源下载 %s（约 100MB 级，取决于网络，过程不可中断）……"
-                          % "、".join("%s → %s" % p for p in missing))
-        QApplication.processEvents()
-
-        def _worker():
-            res = {"ok": [], "err": "", "done": False}
-            try:
-                import argostranslate.package as AP
-                AP.update_package_index()
-                for a, b in missing:
-                    AP.install_package_for_language_pair(a, b)
-                    res["ok"].append((a, b))
-            except Exception as e:
-                res["err"] = "%r" % e
-            res["done"] = True
-            holder["res"] = res
-
-        import threading
-        holder = {}
-        threading.Thread(target=_worker, daemon=True).start()
-
-        from PySide6.QtCore import QTimer
-
-        def _poll():
-            res = holder.get("res")
-            if res is None or not res.get("done"):
-                QTimer.singleShot(400, _poll)
-                return
-            _after_pkg_fill([res.get("ok") or [], res.get("err") or ""])
-
-        QTimer.singleShot(400, _poll)
-        return
-
-    def _after_pkg_fill(payload):
-        ok, err = (payload[0], payload[1]) if payload else ([], "")
-        _pkg_busy["on"] = False
-        btn_pkg_fill.setEnabled(True)
-        _refresh_pkg_table()
-        if ok:
-            pkg_state.setText("已安装：%s。可以回到顶部切换语种了。"
-                              % "、".join("%s → %s" % p for p in ok))
-            log("翻译包下载完成：%s" % ok)
-        elif err:
-            pkg_state.setText("下载失败：%s（网络不通或被墙时，只能手动放离线包）" % err)
-            log("翻译包下载失败：%s" % err)
-        else:
-            pkg_state.setText("没有可下载的语言对。")
-
-    def _uninstall_selected():
-        from PySide6.QtWidgets import QMessageBox
-        i = pkg_table.currentRow()
-        rows = _installed_pairs()
-        if not (0 <= i < len(rows)):
-            QMessageBox.information(root.parentWidget() or None, "翻译包", "先在表里选一行。")
-            return
-        a, b, _v = rows[i]
-        ans = QMessageBox.question(
-            root.parentWidget() or None, "卸载翻译包",
-            "确定卸载 %s → %s 的本地翻译包？卸载后该方向将无法翻译，可以再点补装重新下载。"
-            % (a, b))
-        if ans != QMessageBox.Yes:
-            return
-        try:
-            import argostranslate.package as AP
-            for p in AP.get_installed_packages():
-                if (p.from_code, p.to_code) == (a, b):
-                    AP.uninstall(p)
-                    break
-            log("已卸载翻译包：%s → %s" % (a, b))
-            _refresh_pkg_table()
-            pkg_state.setText("已卸载 %s → %s。" % (a, b))
-        except Exception as e:
-            pkg_state.setText("卸载失败：%r" % e)
-            log("卸载翻译包失败：%r" % e)
-
-    btn_pkg_fill.clicked.connect(_fill_packages)
-    btn_pkg_del.clicked.connect(_uninstall_selected)
 
     head("怎么翻译")
     row = QHBoxLayout()
@@ -8544,10 +8444,16 @@ def build_settings(owner, embedded=False):
                 "reply_preload": cfg["reply_preload"],
             })
             # 外源链路开关：关掉就停采集，只留麦克风
+            _was_running = bool(getattr(owner, "capture", None)
+                                and getattr(owner.capture, "running", False))
             if cfg["source_on"]:
-                if not (owner.capture and owner.capture.running) and not owner.paused:
+                # 只有保存前本来就在收听才接回来；用户没点开始就别替他开
+                if _was_running and not owner.paused:
                     owner.start_capture()
+                else:
+                    owner._apply_capture_state()
             else:
+                owner.paused = False
                 owner.stop_capture()
             if cfg["mic_assist"]:
                 owner.start_mic()
@@ -8574,9 +8480,17 @@ def build_settings(owner, embedded=False):
                 or old_spk != cfg["diarize"] or old_spk_mode != cfg["spk_mode"]:
             owner.restart_engine()
         else:
+            # 保存设置不再无条件「停掉再重启采集」：那会让用户只是改了个皮肤/字号，
+            # 采集就在后台自己开起来了。只把原来在收听的状态接回去，其余保持原样。
+            _was_running = bool(getattr(owner, "capture", None)
+                                and getattr(owner.capture, "running", False))
+            _was_paused = bool(getattr(owner, "paused", False))
+            owner.paused = _was_paused
             owner.stop_capture()
-            owner.paused = False
-            owner.start_capture()
+            if _was_running and not _was_paused:
+                owner.start_capture()
+            else:
+                owner._apply_capture_state()
         if not embedded:
             dlg.accept()
         else:
@@ -10599,7 +10513,7 @@ class MainWindow:
         pv.addWidget(self.pair_table, 1)
         self.tabs.addTab(pair_tab, "Library｜句对")
 
-        # Lab 实验室：能力底座（语种 / 模型 / 词典 / 识别规则 / 外观）
+        # Lab 实验室：能力底座（模型 / 识别规则 / 外观，语种固定 中文 ↔ 英语）
         from PySide6.QtWidgets import QScrollArea, QSpinBox
         from PySide6.QtCore import Qt as _LabQt
         lab_tab = QWidget()
@@ -10609,7 +10523,7 @@ class MainWindow:
         lab_head = QHBoxLayout()
         lab_title = QLabel("Lab 实验室")
         lab_title.setObjectName("sectionTitle")
-        lab_title.setToolTip("能力底座：语种、模型、词典、规则、主题都在这里长出来")
+        lab_title.setToolTip("能力底座：模型、识别规则、主题都在这里长出来；语种固定 中文 ↔ 英语")
         lab_head.addWidget(lab_title)
         # 长描述不再横贯一整行，收进标题 tooltip
         lab_desc = QLabel("")
@@ -10630,7 +10544,7 @@ class MainWindow:
         self.lab_nav_btns = []
         self.lab_stack = QStackedWidget()
         self._lab_page_layouts = {}
-        for i, (key, label) in enumerate((("base", "基础 · 模型语种"),
+        for i, (key, label) in enumerate((("base", "基础 · 模型"),
                                           ("voice", "语音 · TTS"),
                                           ("rules", "规则 · 识别"),
                                           ("look", "外观 · 风格"))):
@@ -10674,24 +10588,8 @@ class MainWindow:
             (target or self._lab_page_layouts["base"]).addWidget(f)
             return v
 
-        # 1) 语种管理器
-        v1 = lab_card("语种管理器", "列表来自 LANG_REGISTRY：新增语种只需登记一条，Capture、Library 的语种框会自动出现。")
-        self.lab_lang_table = QTableWidget(len(LANG_REGISTRY), 5)
-        self.lab_lang_table.setHorizontalHeaderLabels(["语种", "支持方向", "配套包", "状态", "词典"])
-        self.lab_lang_table.verticalHeader().setVisible(False)
-        self.lab_lang_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.lab_lang_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.lab_lang_table.setColumnWidth(0, 90)
-        self.lab_lang_table.setColumnWidth(1, 120)
-        self.lab_lang_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.lab_lang_table.setColumnWidth(3, 70)
-        self.lab_lang_table.setColumnWidth(4, 90)
-        self.lab_lang_table.setMinimumHeight(190)
-        v1.addWidget(self.lab_lang_table)
-        self.lab_lang_hint = QLabel("")
-        self.lab_lang_hint.setObjectName("chip")
-        self.lab_lang_hint.setWordWrap(True)
-        v1.addWidget(self.lab_lang_hint)
+        # 1) 语种管理器已移除：只有 中文 ↔ 英语 真正可用，多语种列表里那些
+        # 「未接入」的条目只会让人以为点一下就能下载，删掉免得误导。
 
         # 2) 模型管理器
         v2 = lab_card("模型管理器", "ASR 与翻译模型分开管理；改尺寸会写进配置，识别引擎在下次启动时按新模型加载。")
@@ -10719,57 +10617,9 @@ class MainWindow:
         self.lab_model_status.setWordWrap(True)
         v2.addWidget(self.lab_model_status)
 
-        # 3) 词典插件市场
-        v3 = lab_card("词典插件市场",
-                      "每个语种挂自己的分词器；装好就在本地 plugins/dict 里，重启仍然在，卸载即摘掉。")
-        self.lab_dict_table = QTableWidget(len(LANG_REGISTRY), 4)
-        self.lab_dict_table.setHorizontalHeaderLabels(["语种", "插件", "状态", "安装 / 卸载"])
-        self.lab_dict_table.verticalHeader().setVisible(False)
-        self.lab_dict_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.lab_dict_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.lab_dict_table.setColumnWidth(0, 110)
-        self.lab_dict_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.lab_dict_table.setColumnWidth(2, 90)
-        self.lab_dict_table.setColumnWidth(3, 172)
-        self.lab_dict_table.setMinimumHeight(250)
-        v3.addWidget(self.lab_dict_table)
-        drow = QHBoxLayout()
-        self.lab_dict_hint = QLabel("")
-        self.lab_dict_hint.setObjectName("chip")
-        self.lab_dict_hint.setWordWrap(True)
-        drow.addWidget(self.lab_dict_hint, 1)
-        btn_dict_import = QPushButton("导入插件文件…")
-        btn_dict_import.setCursor(_LabQt.PointingHandCursor)
-        btn_dict_import.setFixedHeight(26)
-        drow.addWidget(btn_dict_import)
-        btn_dict_open = QPushButton("打开插件目录")
-        btn_dict_open.setCursor(_LabQt.PointingHandCursor)
-        btn_dict_open.setFixedHeight(26)
-        drow.addWidget(btn_dict_open)
-        v3.addLayout(drow)
-
-        def _lab_import_dict():
-            from PySide6.QtWidgets import QFileDialog
-            f, _ = QFileDialog.getOpenFileName(
-                None, "选一个词典插件 json", str(DICT_PLUGIN_DIR),
-                "插件 (*.json)")
-            if not f:
-                return
-            ok, msg = import_dict_plugin(f)
-            self.set_status(msg, "ok" if ok else "warn")
-            try:
-                self.lab_refresh()
-            except Exception:
-                pass
-        btn_dict_import.clicked.connect(_lab_import_dict)
-
-        def _lab_open_dict_dir():
-            try:
-                DICT_PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
-                os.startfile(str(DICT_PLUGIN_DIR))
-            except Exception as e:
-                self.set_status("打不开插件目录：%r" % e, "warn")
-        btn_dict_open.clicked.connect(_lab_open_dict_dir)
+        # 3) 词典插件市场已移除：原来的「安装」只是往 plugins/dict 写一份分词正则，
+        # 装完瞬间就好、但并没有该语种的词条数据，查词仍然是空的 —— 留着只会骗人。
+        # 查词现在固定用内置的中文 / 英文分词。
 
         # 4) 识别规则
         v4 = lab_card("识别规则", "过滤、长度、说话人、原声切片；立即影响 Capture 的记录与字幕。",
@@ -11859,7 +11709,7 @@ class MainWindow:
                 lang_name(self.cfg.get("source_lang") or "zh"),
                 lang_name(self.cfg.get("target_lang") or "en")))
         if hasattr(self, "bar_state"):
-            self.bar_state.setText("已暂停" if paused else "捕获中")
+            self.bar_state.setText("已暂停" if paused else ("捕获中" if running else "未开始"))
             self.bar_audio.setText("音频：%s" % (
                 "已暂停" if paused else (dev if len(dev) <= 16 else dev[:14] + "…")))
         # 字幕条上的状态文字也按三态兜底同步：某个分支漏设时，不再一直卡着「已暂停」
@@ -11871,7 +11721,7 @@ class MainWindow:
                     ov.set_status("已暂停", "")
                 elif not running:
                     ov.set_status("未开始", "")
-                elif cur in ("已暂停", "未开始", "准备中…"):
+                elif cur not in ("识别中", "收听中", "朗读中"):
                     ov.set_status("识别中", "ok")
         except Exception:
             pass
@@ -11891,7 +11741,7 @@ class MainWindow:
             "模块\n"
             "  Capture 捕获台：实时字幕卡片 + 捕获控制；历史在底部抽屉。\n"
             "  Library 语言库：素材库 / 生词本 / 收藏 / 会话 / 句对。\n"
-            "  Lab 实验室：语种、模型、词典、识别规则、外观。\n\n"
+            "  Lab 实验室：模型、识别规则、外观（语种固定 中文 ↔ 英语）。\n\n"
             "核心快捷键（默认 Ctrl+Alt+字母，全部可在设置里改）\n"
             "  %s  开始 / 暂停捕获\n"
             "  %s  收藏当前句\n"
@@ -11926,14 +11776,9 @@ class MainWindow:
         self.set_status("自测模式：%s" % ("开" if on else "关"), "ok")
 
     def _on_capture_btn(self):
+        # 主界面按钮和字幕条按钮走同一条三态逻辑，避免两处各判一套、状态对不上
         try:
-            running = bool(getattr(self.owner, "capture", None)
-                           and getattr(self.owner.capture, "running", False))
-            if not running and not getattr(self.owner, "paused", False):
-                # 未开始 → 第一次点击就是开始，而不是被当成“暂停”
-                self.owner.start_capture()
-            else:
-                self.owner.toggle_pause()
+            self.owner.toggle_pause()
         except Exception as e:
             log("切换捕获失败：" + repr(e))
         self._sync_capture_ui()
@@ -12851,95 +12696,9 @@ class MainWindow:
         return max(0, min(self._lib_idx, len(self._lib_rows) - 1)) if self._lib_rows else 0
 
     # ---------------- Lab 实验室 ----------------
-    def _dict_btns(self, code, installed):
-        """词典插件市场每行两个按钮：装 / 卸，状态不同按钮也不同。"""
-        from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton
-        w = QWidget()
-        lay = QHBoxLayout(w)
-        lay.setContentsMargins(4, 0, 4, 0)
-        lay.setSpacing(6)
-        b1 = QPushButton("重装" if installed else "安装")
-        b1.setFixedHeight(24)
-        b2 = QPushButton("卸载")
-        b2.setFixedHeight(24)
-        b2.setEnabled(bool(installed))
-        b1.clicked.connect(lambda _=False, c=code: self._lab_install_dict(c))
-        b2.clicked.connect(lambda _=False, c=code: self._lab_uninstall_dict(c))
-        lay.addWidget(b1)
-        lay.addWidget(b2)
-        lay.addStretch(1)
-        return w
-
-    def _lab_install_dict(self, code):
-        ok, msg = install_dict_plugin(code)
-        try:
-            self.set_status(msg, "ok" if ok else "warn")
-        except Exception:
-            pass
-        try:
-            self.lab_refresh()
-        except Exception as e:
-            log("刷新词典插件表失败：" + repr(e))
-
-    def _lab_uninstall_dict(self, code):
-        ok, msg = uninstall_dict_plugin(code)
-        try:
-            self.set_status(msg, "ok" if ok else "warn")
-        except Exception:
-            pass
-        try:
-            self.lab_refresh()
-        except Exception as e:
-            log("刷新词典插件表失败：" + repr(e))
-
     def lab_refresh(self):
-        from PySide6.QtWidgets import QTableWidgetItem
-        from PySide6.QtGui import QColor
-        if not hasattr(self, "lab_lang_table"):
-            return
-        codes = list(LANG_REGISTRY.keys())
-        self.lab_lang_table.setRowCount(len(codes))
-        for i, code in enumerate(codes):
-            m = LANG_REGISTRY[code]
-            vals = (m.get("name"), "zh→%s" % code,
-                    "ASR %s ｜ 翻译 %s ｜ TTS %s" % (m.get("asr"), m.get("mt"), m.get("tts")),
-                    "可用" if m.get("installed") else "未接入",
-                    "已挂载" if code in DICT_PARSERS else "未挂载")
-            for j, v in enumerate(vals):
-                self.lab_lang_table.setItem(i, j, QTableWidgetItem(str(v)))
-        n_ok = sum(1 for c in codes if LANG_REGISTRY[c].get("installed"))
-        self.lab_lang_hint.setText(
-            "共 %d 个语种，其中 %d 个可用（有本地翻译包）；未接入的不出现在下拉里，也不提供假下载。"
-            % (len(codes), n_ok))
-
-        self.lab_dict_table.setRowCount(len(codes))
-        n_dict_ok = 0
-        for i, code in enumerate(codes):
-            meta = DICT_CATALOG.get(code) or {}
-            inst = dict_plugin_installed(code)
-            mounted = code in DICT_PARSERS
-            if mounted:
-                n_dict_ok += 1
-            self.lab_dict_table.setItem(i, 0, QTableWidgetItem(
-                "%s %s" % (LANG_REGISTRY[code].get("name"), code)))
-            self.lab_dict_table.setItem(i, 1, QTableWidgetItem(
-                (meta.get("name") + (" v" + str(meta.get("version"))) if meta
-                 else "该语种暂无可用插件")))
-            item = QTableWidgetItem("已安装" if inst else ("已挂载" if mounted else "未安装"))
-            try:
-                item.setForeground(QColor("#3C8F63") if (inst or mounted) else QColor("#9A948C"))
-            except Exception:
-                pass
-            self.lab_dict_table.setItem(i, 2, item)
-            self.lab_dict_table.setCellWidget(i, 3, self._dict_btns(code, inst))
-
-        try:
-            self.lab_dict_hint.setText(
-                "已挂载 %d / %d 个语种的分词器；插件落在 %s，重启自动加载。"
-                % (n_dict_ok, len(codes), str(DICT_PLUGIN_DIR)))
-        except Exception:
-            pass
-
+        # 语种管理器 / 词典插件市场两块已经删掉：这里只刷新模型选择与状态，
+        # 不再维护「多语种列表」和「装插件」的假能力。
         cur_asr = str(self.cfg.get("whisper_model") or "small")
         for k in range(self.lab_asr.count()):
             if self.lab_asr.itemData(k) == cur_asr:
@@ -15035,20 +14794,28 @@ class App:
     def toggle_capture_hotkey(self):
         """热键开关音频识别：不想听的时候彻底停掉采集，省 CPU。"""
         if self.capture and self.capture.running:
+            self.paused = False
             self.stop_capture()
             self.cfg["source_on"] = False
             try:
                 self.overlay.cfg["source_on"] = False
             except Exception:
                 pass
-            self.overlay.set_status("已停止收听", "")
+            self._apply_capture_state()
             log("音频识别：关")
         else:
             self.cfg["source_on"] = True
+            try:
+                self.overlay.cfg["source_on"] = True
+            except Exception:
+                pass
             self.paused = False
-            self.start_capture()
-            self.overlay.set_status("识别中", "ok")
-            log("音频识别：开")
+            if not self.start_capture():
+                self._apply_capture_state()
+                log("音频识别：开但没启动（引擎还没就绪？）")
+            else:
+                self._apply_capture_state()
+                log("音频识别：开")
 
     def _pipeline_state(self, kind, msg):
         tone = "ok" if kind in ("ready", "asr_ready", "trans_ready") else (
@@ -15065,18 +14832,44 @@ class App:
                 self.main.chip_trans.setText("翻译：加载失败")
         self.ui_q.put(("state", msg, tone))
         self.main.set_status(msg, tone)
-        if kind == "ready" and not self.paused and bool(self.cfg.get("auto_start_capture", False)):
-            # 默认不自动开录：按钮的「开始捕获」必须是用户点了才真的开始，
-            # 否则按钮文案落在「开始」而引擎已在收听，第一次点击就变成了暂停。
+        if kind != "ready":
+            return
+        # 引擎就绪：只有两种情况自动接回采集 ——
+        # ① 上一轮重启引擎前本来在收听（换模型 / 切语种后的自动恢复）；
+        # ② 用户自己开了「开机自动开始捕获」。
+        # 其余情况老老实实停在「未开始」，等用户点按钮。
+        resume = bool(getattr(self, "_resume_capture_after_pipeline", False))
+        self._resume_capture_after_pipeline = False
+        if resume and not self.paused:
+            self.paused = False
+            self.start_capture()
+            log("引擎就绪：接回原来的收听状态")
+            return
+        if not self.paused and bool(self.cfg.get("auto_start_capture", False)):
+            self.paused = False
             self.start_capture()
             self.start_mic()
+            log("引擎就绪：按设置自动开始捕获")
+            return
+        # 没有要接回来的收听：把三态刷成「未开始」，别让上一轮的提示留在字幕条上
+        try:
+            self._apply_capture_state()
+        except Exception:
+            pass
 
     def _audio_state(self, kind, msg):
         tone = "ok" if kind == "listening" else "error"
         self.ui_q.put(("state", msg, tone))
         self.main.set_status(msg, tone)
         if kind == "error":
-            self.paused = True
+            # 采集真的掉线才标「已暂停」；只是这一句没听清楚、或用户刚主动停掉时别改状态
+            running = bool(self.capture and getattr(self.capture, "running", False))
+            if not running and getattr(self, "capture", None) is not None:
+                self.paused = True
+            try:
+                self._apply_capture_state()
+            except Exception:
+                pass
 
     def start_pipeline(self):
         self.pipeline = Pipeline(self.cfg, self.seg_q, self.ui_q, self._pipeline_state, self.rec_q,
@@ -15084,27 +14877,52 @@ class App:
         self.pipeline.start()
 
     def start_capture(self):
+        """真正开始采集。返回 True 才算起来了；False 表示外源识别被关掉，什么都没做。
+
+        以前这里静默 return 但调用方照样把按钮写成「暂停捕获」，于是界面说在收听、
+        实际一帧音频都没采到，再点就变成「继续」——三态彻底对不上。
+        """
         if not bool(self.cfg.get("source_on", True)):
             log("外源音频识别已关：只保留麦克风链路")
-            return
+            return False
         if self.capture and self.capture.running:
-            return
+            self.paused = False
+            self._apply_capture_state()
+            return True
         self.capture = AudioCapture(self.cfg, self.seg_q, self._audio_state)
         self.capture.start()
+        self.paused = False
+        self._apply_capture_state()
+        return True
+
+    def _apply_capture_state(self):
+        """三态唯一出口：未开始 / 识别中 / 已暂停。
+
+        字幕条按钮、主界面按钮、状态文字全部从「采集是否真的在跑 + 是否被暂停」
+        推出来，任何入口改完都调这一处，不再各写各的文案。
+        """
+        running = bool(self.capture and getattr(self.capture, "running", False))
+        paused = bool(self.paused) and not running
+        btn = "暂停捕获" if running else ("继续捕获" if paused else "开始捕获")
         try:
-            self.overlay.btn_pause.setText("暂停捕获")
+            self.overlay.btn_pause.setText(btn)
         except Exception:
             pass
-        # 开始/恢复后立刻把字幕条状态改回「识别中」：以前这里只改按钮文案，
-        # 状态文字还停在上一轮留下的「已暂停」，于是点「继续捕获」看着像没反应。
         try:
-            self.overlay.set_status("识别中", "ok")
+            self.main.btn_capture.setText(btn)
+        except Exception:
+            pass
+        # 主界面顶部那颗主按钮文案短一档（开始 / 暂停 / 继续），也从这里统一写
+        try:
+            self.main.btn_pause.setText(
+                "暂停" if running else ("继续" if paused else "开始"))
         except Exception:
             pass
         try:
             self.main._sync_capture_ui()
         except Exception:
             pass
+
 
     def _mic_translate(self):
         """麦克风侧用的翻译器：优先离线 Argos，在线引擎就走在线接口。"""
@@ -15147,53 +14965,44 @@ class App:
             self.mic_assist = None
 
     def stop_capture(self):
+        """停掉采集，并按「是否被暂停」刷新三态（不主动清掉 paused 标记）。"""
+        was_paused = bool(self.paused)
         if self.capture:
             self.capture.stop()
             self.capture = None
-        try:
-            self.overlay.btn_pause.setText("开始捕获")
-        except Exception:
-            pass
-        try:
-            self.main._sync_capture_ui()
-        except Exception:
-            pass
+        self.paused = was_paused
+        self._apply_capture_state()
 
     def toggle_pause(self):
+        """三态唯一入口：未开始 → 开始；运行中 → 暂停；已暂停 → 继续。
+
+        只有 start_capture 真把采集拉起来才换成「暂停捕获」，否则老老实实留在
+        「未开始」并说明原因，不再出现“按钮说在收听、其实没在采”的假状态。
+        """
         running = bool(self.capture and getattr(self.capture, "running", False))
-        log("捕获切换：running=%s paused=%s" % (running, self.paused))
-        if not running and not self.paused:
-            # 从未开始：第一次点就是开始。原来直接落进暂停分支，要点两次才真正开始。
-            self.paused = False
-            self.start_capture()
-            self.overlay.set_status("收听中", "ok")
-            self.overlay.btn_pause.setText("暂停捕获")
-            self.main.set_status("收听中", "ok")
-            try:
-                self.main._sync_capture_ui()
-            except Exception:
-                pass
-            return
-        if self.paused:
-            self.paused = False
-            self.start_capture()
-            self.overlay.set_status("已恢复收听", "ok")
-            self.overlay.btn_pause.setText("暂停捕获")
-            self.main.set_status("已恢复收听", "ok")
-            self.main.btn_pause.setText("暂停")
-        else:
+        paused = bool(self.paused) and not running
+        log("捕获切换：running=%s paused=%s" % (running, paused))
+        if running:
             self.paused = True
             self.stop_capture()
-            self.overlay.set_status("已暂停", "")
-            self.overlay.btn_pause.setText("继续捕获")
-            self.main.set_status("已暂停", "")
-            self.main.btn_pause.setText("继续")
-        try:
-            self.main._sync_capture_ui()
-        except Exception:
-            pass
+            log("捕获切换 → 已暂停")
+            return
+        self.paused = False
+        if not self.start_capture():
+            self.paused = False
+            self._apply_capture_state()
+            try:
+                self.overlay.set_status("未开始 · 外源识别已关", "warn")
+                self.main.set_status("外源音频识别已关：到设置「听声音」里打开它", "warn")
+            except Exception:
+                pass
+            log("捕获切换 → 未开始（外源识别已关，没有启动）")
+            return
+        log("捕获切换 → " + ("已恢复" if paused else "开始捕获"))
 
     def restart_engine(self):
+        was_running = bool(self.capture and getattr(self.capture, "running", False))
+        was_paused = bool(self.paused) and not was_running
         self.stop_capture()
         if self.pipeline:
             self.pipeline.stop()
@@ -15203,7 +15012,10 @@ class App:
                 self.seg_q.get_nowait()
             except queue.Empty:
                 break
-        self.paused = False
+        self.paused = was_paused
+        # 只有引擎重启前确实在收听，才在模型就绪后自动接回来；
+        # 否则保持「未开始」，别再替用户偷偷开录。
+        self._resume_capture_after_pipeline = bool(was_running and not was_paused)
         self.start_pipeline()
 
     def open_settings(self):
