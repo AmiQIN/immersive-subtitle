@@ -78,8 +78,8 @@
 ## 环境要求
 
 - **操作系统**：Windows。
-- **免安装包**：Releases 压缩包已带齐运行库，解压即用，无需装 Python；识别与翻译模型首次使用时下载。
-- **源码运行**：Python 环境，主要依赖 PySide6、faster-whisper、Argos Translate、NumPy、torch、speechbrain、soundcard、OpenCC；首次使用需下载识别与翻译模型。
+- **免安装包**：Releases 压缩包已带齐运行库与中英离线翻译包，解压即用，无需装 Python；识别模型首次使用时下载。
+- **源码运行**：Python 环境，主要依赖 PySide6、faster-whisper、Argos Translate、NumPy、torch、speechbrain、soundcard、OpenCC；首次使用需自行准备识别模型与中英翻译包。
 - **显卡加速（可选）**：将 cuBLAS 运行库放在程序同级目录即可自动加载，缺失时静默回退 CPU。
 
 ## 已知限制

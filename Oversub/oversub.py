@@ -2440,13 +2440,45 @@ def asr_model_cached(name):
     return False
 
 
+def _argos_package_dirs():
+    """Argos 已安装包的用户目录（本机与别的机器一致）。"""
+    return [Path.home() / ".local" / "share" / "argos-translate" / "packages",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "argos-translate" / "packages"]
+
+
+def ensure_argos_packages():
+    """安装包随带的中英双向 Argos 包：首次运行拷到用户目录，Argos 才能扫到。"""
+    import shutil
+    try:
+        bundled = ROOT / "packages"
+        if not bundled.is_dir():
+            return
+        installed = [p for d in _argos_package_dirs() if d.is_dir()
+                     for p in d.iterdir() if p.is_dir() and (p / "metadata.json").exists()]
+        if installed:
+            return
+        target = _argos_package_dirs()[0]
+        target.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for pkg in bundled.iterdir():
+            if pkg.is_dir() and (pkg / "metadata.json").exists():
+                shutil.copytree(pkg, target / pkg.name, dirs_exist_ok=True)
+                copied += 1
+        if copied:
+            log("已随包准备好中英离线翻译包（%d 个）" % copied)
+    except Exception as e:
+        log("随包翻译包拷贝失败：" + repr(e))
+
+
 def argos_installed():
     """离线翻译包是否存在（不 import argos，避免设置页一开就卡）。"""
     try:
-        for p in (Path.home() / ".local" / "share" / "argos-translate" / "packages",
-                  Path(os.environ.get("LOCALAPPDATA", "")) / "argos-translate" / "packages"):
+        for p in _argos_package_dirs():
             if p.exists() and any(p.iterdir()):
                 return True
+        bundled = ROOT / "packages"
+        if bundled.is_dir() and any(bundled.iterdir()):
+            return True
     except Exception:
         pass
     return False
@@ -3144,6 +3176,7 @@ class Pipeline(threading.Thread):
                 log("离线翻译不可用，在线引擎照常工作：" + repr(e))
                 return None
             raise
+        ensure_argos_packages()
         langs = argos.get_installed_languages()
         sl = CURRENT_LANGS.get("sl", "zh")
         tl = CURRENT_LANGS.get("tl", "en")
@@ -3660,6 +3693,7 @@ class WordBook:
             except Exception:
                 pass
             from argostranslate import translate as argos
+            ensure_argos_packages()
             langs = argos.get_installed_languages()
             en = next((l for l in langs if l.code == "en"), None)
             zh = next((l for l in langs if l.code == "zh"), None)

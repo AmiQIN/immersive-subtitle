@@ -27,7 +27,7 @@
 
 ### Oversub 沉浸字幕
 
-- **免安装绿色包**：在 [Releases](https://github.com/AmiQIN/immersive-subtitle/releases) 下载最新压缩包，解压后双击 `Oversub.exe` 即可运行，无需另装 Python 和依赖；识别 / 翻译模型首次使用时按提示下载。
+- **免安装绿色包**：在 [Releases](https://github.com/AmiQIN/immersive-subtitle/releases) 下载最新压缩包，解压后双击 `Oversub.exe` 即可运行，无需另装 Python 和依赖；中英离线翻译包已随包带上，识别模型首次使用时按提示下载。
 - **从源码运行**：在装好依赖的 Python 环境中运行 `Oversub/oversub.py`，或双击 `Oversub/启动沉浸字幕.cmd`。
 - 打包产物、运行库、模型和缓存体积较大，均不纳入仓库（见 `.gitignore`）。
 - 界面操作、快捷键、学习功能、导出与已知限制见 [`Oversub/README.md`](Oversub/README.md)。
