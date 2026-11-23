@@ -8,6 +8,8 @@ Oversub/build_new/
 Oversub/cuda_libs/
 Oversub/models/
 Oversub/tts_cache/
+Oversub/cache/
+Oversub/plugins/
 Oversub/Oversub.exe
 *.spec
 .build/
